@@ -3,20 +3,20 @@ import yfinance as yf
 import pandas as pd
 
 # CONFIG TAMPILAN DASHBOARD OPTIMIZED FOR MOBILE
-st.set_page_config(page_title="Terminal Saham Mobile", layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="Terminal Saham Mobile Pro", layout="wide", initial_sidebar_state="collapsed")
 
 # CSS KHUSUS MOBILE UI AGAR TAMPILAN TIDAK BERTABRAKAN
 st.markdown("""
     <style>
     .block-container { padding-top: 1rem; padding-bottom: 2rem; padding-left: 0.8rem; padding-right: 0.8rem; }
-    div[data-testid="stMetricValue"] { font-size: 1.2rem !important; }
-    div[data-testid="stMetricLabel"] { font-size: 0.8rem !important; }
+    div[data-testid="stMetricValue"] { font-size: 1.1rem !important; }
+    div[data-testid="stMetricLabel"] { font-size: 0.75rem !important; }
     .stTable { font-size: 0.8rem !important; }
     </style>
 """, unsafe_allow_html=True)
 
 st.title("📊 Terminal Saham Pro")
-st.caption("Pre-Buy Audit, Riset & Jurnal Portofolio Realtime")
+st.caption("Pre-Buy Audit (Div Yield & MA50 Included) & Jurnal Portofolio")
 
 # STATE MEMORI APLIKASI
 if 'portfolio' not in st.session_state:
@@ -33,7 +33,7 @@ if 'realized' not in st.session_state:
 def get_market_status():
     try:
         ihsg = yf.Ticker("^JKSE")
-        df_ihsg = ihsg.history(period="1mo")
+        df_ihsg = ihsg.history(period="3mo")
         if not df_ihsg.empty:
             last_ihsg = float(df_ihsg['Close'].iloc[-1])
             ma20_ihsg = float(df_ihsg['Close'].rolling(20).mean().iloc[-1])
@@ -81,7 +81,7 @@ if menu == "🔍 Pre-Buy Audit & Analisis Saham":
     def load_stock_data(symbol):
         try:
             stock = yf.Ticker(symbol)
-            df = stock.history(period="3mo")
+            df = stock.history(period="6mo") # Diperpanjang ke 6 bulan untuk MA50
             info = stock.info
             return df, info
         except:
@@ -94,8 +94,14 @@ if menu == "🔍 Pre-Buy Audit & Analisis Saham":
     else:
         last_price = float(df['Close'].iloc[-1])
         ma20 = float(df['Close'].rolling(20).mean().iloc[-1])
+        ma50 = float(df['Close'].rolling(50).mean().iloc[-1]) # HITUNG MA50
+        
         pbv = info.get('priceToBook', 0)
         per = info.get('trailingPE', 0)
+        
+        # HITUNG DIVIDEND YIELD
+        div_rate = info.get('dividendYield', 0)
+        div_yield_pct = (div_rate * 100) if div_rate else 0.0
 
         # HITUNG RSI
         delta = df['Close'].diff()
@@ -105,23 +111,27 @@ if menu == "🔍 Pre-Buy Audit & Analisis Saham":
         rsi = 100 - (100 / (1 + rs)).iloc[-1]
 
         st.markdown("---")
-        st.markdown("#### 📊 Indikator Utama")
+        st.markdown("#### 📊 Indikator Utama & Valuasi")
         
-        # DISPLAY METRIK 2 KOLOM SUPAYA MUAT DI HP
+        # METRIK TAMPILAN HP (RESPONSIF 2 KOLOM)
         m1, m2 = st.columns(2)
         m1.metric("Harga Terakhir", f"Rp {last_price:,.0f}")
-        m2.metric("Support (MA20)", f"Rp {ma20:,.0f}")
-        
+        m2.metric("Dividend Yield", f"{div_yield_pct:.2f}%" if div_yield_pct > 0 else "0.00%")
+
         m3, m4 = st.columns(2)
-        m3.metric("PBV", f"{pbv:.2f}x" if pbv else "N/A")
-        m4.metric("PER", f"{per:.2f}x" if per else "N/A")
+        m3.metric("Support MA20", f"Rp {ma20:,.0f}")
+        m4.metric("Support MA50", f"Rp {ma50:,.0f}")
+
+        m5, m6 = st.columns(2)
+        m5.metric("PBV", f"{pbv:.2f}x" if pbv else "N/A")
+        m6.metric("PER", f"{per:.2f}x" if per else "N/A")
         
         rsi_status = "Netral"
         if rsi < 35: rsi_status = "Oversold"
         elif rsi > 70: rsi_status = "Overbought"
         st.metric("RSI Momentum", f"{rsi:.1f}", rsi_status)
 
-        # TREN HARI MINGGUAN DIBUATKAN EXPANDER UNTUK MENGHEMAT LAYAR HP
+        # TREN HARI MINGGUAN
         with st.expander("📈 Tren Harga 1 Minggu Kebelakang"):
             df_1w = df.tail(5).copy()
             df_1w['Tanggal'] = df_1w.index.strftime('%m-%d')
@@ -152,39 +162,38 @@ if menu == "🔍 Pre-Buy Audit & Analisis Saham":
 
         chk_fundamental = True if per > 0 and per < 15 else False
         chk_valuasi = True if pbv > 0 and pbv <= 1.5 else False
+        chk_dividen = True if div_yield_pct >= 3.0 else False # EVALUASI DIVIDEND YIELD >= 3%
         chk_bisnis = True
         chk_manajemen = True
-        chk_risiko = True
-        chk_entry = True if entry_price <= (ma20 * 1.02) else False
+        chk_entry_ma20 = True if entry_price <= (ma20 * 1.02) else False
+        chk_trend_ma50 = True if last_price >= ma50 else False # EVALUASI TREN DI ATAS MA50
         chk_target = True if tp_price > entry_price else False
         chk_sl = True if sl_price < entry_price else False
 
         checklist_items = [
             ("Fundamental PER < 15x", chk_fundamental),
             ("Valuasi PBV <= 1.5x", chk_valuasi),
-            ("Bisnis Mudah Dipahami", chk_bisnis),
-            ("Manajemen Terpercaya", chk_manajemen),
-            ("Risiko Dipahami", chk_risiko),
-            ("Entry Dekat MA20", chk_entry),
+            ("Dividend Yield Menarik (>= 3%)", chk_dividen),
+            ("Tren Sehat (Harga di atas MA50)", chk_trend_ma50),
+            ("Entry Dekat Support MA20", chk_entry_ma20),
             ("Target Price Realistis", chk_target),
             ("Stop Loss Terpasang", chk_sl)
         ]
 
-        # REKAP CHECKLIST MOBILE FRIENDLY
         for item, status in checklist_items:
             st.write(f"{'✅' if status else '❌'} {item}")
 
-        total_score = sum([chk_fundamental, chk_valuasi, chk_bisnis, chk_manajemen, chk_risiko, chk_entry, chk_target, chk_sl])
+        total_score = sum([chk_fundamental, chk_valuasi, chk_dividen, chk_trend_ma50, chk_entry_ma20, chk_target, chk_sl])
         gain_pct = ((tp_price - entry_price) / entry_price) * 100
         risk_pct = ((entry_price - sl_price) / entry_price) * 100
         rrr = gain_pct / risk_pct if risk_pct > 0 else 0
 
         st.markdown("---")
         st.write(f"**Gain:** :green[+{gain_pct:.2f}%] | **Risk:** :red[-{risk_pct:.2f}%]")
-        st.write(f"**RRR:** **1 : {rrr:.2f}** | **Skor:** **{total_score}/8**")
+        st.write(f"**RRR:** **1 : {rrr:.2f}** | **Skor:** **{total_score}/7**")
 
-        if total_score < 5:
-            st.error("🚨 REJECT: Skor di bawah 5/8.")
+        if total_score < 4:
+            st.error("🚨 REJECT: Skor di bawah 4/7.")
         elif rrr < 1.5:
             st.warning(f"⚠️ WAIT & SEE: RRR (1:{rrr:.2f}) terlalu kecil.")
         else:
@@ -227,7 +236,6 @@ elif menu == "💼 Portfolio Monitoring (Floating P&L)":
             tot_modal += modal
             tot_floating += float_rp
 
-            # TAMPILAN KARTU PORTOFOLIO DI HP
             with st.container():
                 st.markdown(f"### {item['ticker']} ({item['lots']} Lot)")
                 st.write(f"Avg: Rp {item['avg']:,.0f} | Now: Rp {item['current']:,.0f}")
