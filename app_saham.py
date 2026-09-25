@@ -102,12 +102,14 @@ if menu == "🔍 Pre-Buy Audit & Analisis Saham":
         # HITUNG DIVIDEND YIELD
         div_rate = info.get('dividendYield', 0)
         if div_rate:
-            if div_rate > 1.0:
-                # Jika Yahoo mengirim nominal Rp/saham, hitung rasio manual terhadap last_price
-                div_yield_pct = (div_rate / last_price) * 100
-            else:
-                # Jika Yahoo mengirim format desimal standar (misal 0.05)
-                div_yield_pct = div_rate * 100
+            # RUMUS DIVIDEND YIELD AKURAT & FIX
+        div_rate = info.get('dividendRate', 0) # Nominal dividen Rp per lembar
+        if div_rate and div_rate > 0:
+            div_yield_pct = (div_rate / last_price) * 100
+        else:
+            # Fallback jika dividendRate kosong
+            raw_yield = info.get('dividendYield', 0)
+            div_yield_pct = (raw_yield * 100) if raw_yield else 0.0
         else:
             div_yield_pct = 0.0
 
