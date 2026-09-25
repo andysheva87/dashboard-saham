@@ -216,19 +216,21 @@ if menu == "🔍 Pre-Buy Audit & Analisis Saham":
 # =========================================================
 # MENU 2: PORTFOLIO MONITORING (FLOATING P&L)
 # =========================================================
+# =========================================================
+# MENU 2: PORTFOLIO MONITORING (FLOATING P&L REALTIME)
+# =========================================================
 elif menu == "💼 Portfolio Monitoring (Floating P&L)":
-    st.subheader("2. Portofolio Aktif")
+    st.subheader("2. Portofolio Aktif (Realtime Market Price)")
 
     with st.expander("➕ Tambah Posisi Saham Baru"):
-        new_ticker = st.text_input("Kode", "ASII").upper()
-        new_lots = st.number_input("Lot", min_value=1, value=10)
-        new_avg = st.number_input("Harga Avg (Rp)", min_value=1, value=5000)
-        new_curr = st.number_input("Harga Sekarang (Rp)", min_value=1, value=5100)
+        new_ticker = st.text_input("Kode Saham", "ASII").upper()
+        new_lots = st.number_input("Jumlah Lot", min_value=1, value=10)
+        new_avg = st.number_input("Harga Beli / Average (Rp)", min_value=1, value=5000)
         if st.button("Simpan Posisi"):
             st.session_state.portfolio.append({
-                'ticker': new_ticker, 'lots': new_lots, 'avg': new_avg, 'current': new_curr
+                'ticker': new_ticker, 'lots': new_lots, 'avg': new_avg
             })
-            st.success("Tersimpan!")
+            st.success("Posisi berhasil ditambahkan!")
             st.rerun()
 
     if not st.session_state.portfolio:
@@ -237,29 +239,56 @@ elif menu == "💼 Portfolio Monitoring (Floating P&L)":
         tot_modal = 0
         tot_floating = 0
 
+        st.markdown("---")
         for item in st.session_state.portfolio:
+            ticker_idx = f"{item['ticker']}.JK"
+            
+            # TARIK HARGA TERAKHIR REALTIME DARI YAHOO FINANCE
+            try:
+                stock_data = yf.Ticker(ticker_idx)
+                hist = stock_data.history(period="1d")
+                if not hist.empty:
+                    current_price = float(hist['Close'].iloc[-1])
+                else:
+                    current_price = item.get('current', item['avg'])
+            except:
+                current_price = item.get('current', item['avg'])
+
             modal = item['lots'] * 100 * item['avg']
-            val_current = item['lots'] * 100 * item['current']
+            val_current = item['lots'] * 100 * current_price
             float_rp = val_current - modal
-            float_pct = (float_rp / modal) * 100
+            float_pct = (float_rp / modal) * 100 if modal > 0 else 0
 
             tot_modal += modal
             tot_floating += float_rp
 
+            # TAMPILAN KARTU PORTOFOLIO DENGAN HARGA REALTIME
             with st.container():
                 st.markdown(f"### {item['ticker']} ({item['lots']} Lot)")
-                st.write(f"Avg: Rp {item['avg']:,.0f} | Now: Rp {item['current']:,.0f}")
-                st.write(f"Floating: **Rp {float_rp:,.0f}** ({float_pct:.2f}%)")
+                st.write(f"Avg: **Rp {item['avg']:,.0f}** | Market Now: **Rp {current_price:,.0f}**")
+                
+                if float_rp >= 0:
+                    st.markdown(f"Floating P&L: :green[**+Rp {float_rp:,.0f} (+{float_pct:.2f}%)**]")
+                else:
+                    st.markdown(f"Floating P&L: :red[**Rp {float_rp:,.0f} ({float_pct:.2f}%)**]")
                 st.markdown("---")
 
         c1, c2 = st.columns(2)
         c1.metric("Modal Aktif", f"Rp {tot_modal:,.0f}")
-        c2.metric("Total Floating", f"Rp {tot_floating:,.0f}", f"{(tot_floating/tot_modal)*100:.2f}%" if tot_modal > 0 else "0%")
+        c2.metric("Total Floating P&L", f"Rp {tot_floating:,.0f}", f"{(tot_floating/tot_modal)*100:.2f}%" if tot_modal > 0 else "0%")
 
         st.markdown("---")
-        st.subheader("Eksekusi Jual")
+        st.subheader("Eksekusi Jual / Close Position")
         selected_idx = st.selectbox("Pilih Saham", range(len(st.session_state.portfolio)), format_func=lambda x: st.session_state.portfolio[x]['ticker'])
-        sell_price = st.number_input("Harga Jual (Rp)", value=st.session_state.portfolio[selected_idx]['current'])
+        
+        # Ambil harga realtime saham yang dipilih untuk harga acuan jual
+        selected_item = st.session_state.portfolio[selected_idx]
+        try:
+            default_sell = float(yf.Ticker(f"{selected_item['ticker']}.JK").history(period="1d")['Close'].iloc[-1])
+        except:
+            default_sell = selected_item['avg']
+
+        sell_price = st.number_input("Harga Jual Eksekusi (Rp)", value=int(default_sell))
         
         if st.button("Jual & Catat Realized P&L"):
             item_sold = st.session_state.portfolio.pop(selected_idx)
@@ -271,10 +300,8 @@ elif menu == "💼 Portfolio Monitoring (Floating P&L)":
                 'sell_price': sell_price, 'realized_rp': realized_rp,
                 'status': 'TAKE PROFIT' if realized_rp >= 0 else 'CUT LOSS'
             })
-            st.success("Posisi Berhasil Ditutup!")
+            st.success(f"Posisi {item_sold['ticker']} Berhasil Ditutup!")
             st.rerun()
-
-
 # =========================================================
 # MENU 3: RIWAYAT TRANSAKSI (REALIZED P&L)
 # =========================================================
