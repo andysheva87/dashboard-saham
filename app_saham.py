@@ -5,7 +5,7 @@ import pandas as pd
 # CONFIG TAMPILAN DASHBOARD OPTIMIZED FOR MOBILE
 st.set_page_config(page_title="Terminal Saham Mobile Pro", layout="wide", initial_sidebar_state="collapsed")
 
-# CSS KHUSUS MOBILE UI AGAR TAMPILAN TIDAK BERTABRAKAN
+# CSS KHUSUS MOBILE UI
 st.markdown("""
     <style>
     .block-container { padding-top: 1rem; padding-bottom: 2rem; padding-left: 0.8rem; padding-right: 0.8rem; }
@@ -96,19 +96,22 @@ if menu == "🔍 Pre-Buy Audit & Analisis Saham":
         ma20 = float(df['Close'].rolling(20).mean().iloc[-1])
         ma50 = float(df['Close'].rolling(50).mean().iloc[-1])
         
-        pbv = info.get('priceToBook', 0) if info.get('priceToBook') else 0.0
-        per = info.get('trailingPE', 0) if info.get('trailingPE') else 0.0
+        # Ambil data rasio dengan penanganan N/A
+        pbv_raw = info.get('priceToBook')
+        per_raw = info.get('trailingPE')
+        pbv = float(pbv_raw) if pbv_raw is not None else 0.0
+        per = float(per_raw) if per_raw is not None else 0.0
         
-        # PERBAIKAN RUMUS DIVIDEND YIELD AKURAT
-        div_rate = info.get('dividendRate', 0)
+        # Kalkulasi Dividend Yield Akurat
+        div_rate = info.get('dividendRate')
+        raw_yield = info.get('dividendYield')
+        
         if div_rate and div_rate > 0:
             div_yield_pct = (div_rate / last_price) * 100
+        elif raw_yield and raw_yield > 0:
+            div_yield_pct = raw_yield * 100 if raw_yield < 1.0 else (raw_yield / last_price) * 100
         else:
-            raw_yield = info.get('dividendYield', 0)
-            if raw_yield:
-                div_yield_pct = raw_yield * 100 if raw_yield < 1.0 else (raw_yield / last_price) * 100
-            else:
-                div_yield_pct = 0.0
+            div_yield_pct = 0.0
 
         # HITUNG RSI
         delta = df['Close'].diff()
@@ -123,15 +126,15 @@ if menu == "🔍 Pre-Buy Audit & Analisis Saham":
         # METRIK TAMPILAN HP
         m1, m2 = st.columns(2)
         m1.metric("Harga Terakhir", f"Rp {last_price:,.0f}")
-        m2.metric("Dividend Yield", f"{div_yield_pct:.2f}%" if div_yield_pct > 0 else "0.00%")
+        m2.metric("Dividend Yield", f"{div_yield_pct:.2f}%" if div_yield_pct > 0 else "N/A (Pending)")
 
         m3, m4 = st.columns(2)
         m3.metric("Support MA20", f"Rp {ma20:,.0f}")
         m4.metric("Support MA50", f"Rp {ma50:,.0f}")
 
         m5, m6 = st.columns(2)
-        m5.metric("PBV", f"{pbv:.2f}x" if pbv else "N/A")
-        m6.metric("PER", f"{per:.2f}x" if per else "N/A")
+        m5.metric("PBV", f"{pbv:.2f}x" if pbv > 0 else "N/A")
+        m6.metric("PER", f"{per:.2f}x" if per > 0 else "N/A")
         
         rsi_status = "Netral"
         if rsi < 35: rsi_status = "Oversold"
@@ -163,15 +166,17 @@ if menu == "🔍 Pre-Buy Audit & Analisis Saham":
         else:
             st.warning("Stop Loss harus lebih kecil dari Entry!")
 
-        # CHECKLIST AUDIT OTOMATIS (FIXED)
+        # CHECKLIST AUDIT OTOMATIS (SMART PROTEKSI)
         st.markdown("---")
         st.markdown("#### 📋 Pre-Buy Checklist")
 
-        chk_fundamental = True if (per > 0 and per < 15) else False
-        chk_valuasi = True if (pbv > 0 and pbv <= 1.5) else False
-        chk_dividen = True if div_yield_pct >= 3.0 else False
-        chk_trend_ma50 = True if last_price >= ma50 else False
-        chk_entry_ma20 = True if entry_price <= (ma20 * 1.02) else False
+        is_bigcap = ticker_input in ['BBRI', 'BBNI', 'BMRI', 'BBCA', 'TLKM', 'ASII', 'PGAS', 'JPFA']
+
+        chk_fundamental = True if (0 < per < 15) or (per == 0 and is_bigcap) else False
+        chk_valuasi = True if (0 < pbv <= 1.5) or (pbv == 0 and is_bigcap) else False
+        chk_dividen = True if (div_yield_pct >= 3.0) or (div_yield_pct == 0 and is_bigcap) else False
+        chk_trend_ma50 = True if last_price >= (ma50 * 0.98) else False
+        chk_entry_ma20 = True if entry_price <= (ma20 * 1.03) else False
         chk_target = True if tp_price > entry_price else False
         chk_sl = True if sl_price < entry_price else False
 
