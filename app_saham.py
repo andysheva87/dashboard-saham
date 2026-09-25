@@ -101,8 +101,7 @@ if menu == "🔍 Pre-Buy Audit & Analisis Saham":
         
         # HITUNG DIVIDEND YIELD
         div_rate = info.get('dividendYield', 0)
-        if div_rate:
-            # RUMUS DIVIDEND YIELD AKURAT & FIX
+        # RUMUS DIVIDEND YIELD AKURAT & FIX
         div_rate = info.get('dividendRate', 0) # Nominal dividen Rp per lembar
         if div_rate and div_rate > 0:
             div_yield_pct = (div_rate / last_price) * 100
@@ -110,8 +109,6 @@ if menu == "🔍 Pre-Buy Audit & Analisis Saham":
             # Fallback jika dividendRate kosong
             raw_yield = info.get('dividendYield', 0)
             div_yield_pct = (raw_yield * 100) if raw_yield else 0.0
-        else:
-            div_yield_pct = 0.0
 
         # HITUNG RSI
         delta = df['Close'].diff()
