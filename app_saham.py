@@ -81,7 +81,7 @@ if menu == "🔍 Pre-Buy Audit & Analisis Saham":
     def load_stock_data(symbol):
         try:
             stock = yf.Ticker(symbol)
-            df = stock.history(period="6mo") # Diperpanjang ke 6 bulan untuk MA50
+            df = stock.history(period="6mo")
             info = stock.info
             return df, info
         except:
@@ -94,21 +94,21 @@ if menu == "🔍 Pre-Buy Audit & Analisis Saham":
     else:
         last_price = float(df['Close'].iloc[-1])
         ma20 = float(df['Close'].rolling(20).mean().iloc[-1])
-        ma50 = float(df['Close'].rolling(50).mean().iloc[-1]) # HITUNG MA50
+        ma50 = float(df['Close'].rolling(50).mean().iloc[-1])
         
-        pbv = info.get('priceToBook', 0)
-        per = info.get('trailingPE', 0)
+        pbv = info.get('priceToBook', 0) if info.get('priceToBook') else 0.0
+        per = info.get('trailingPE', 0) if info.get('trailingPE') else 0.0
         
-        # HITUNG DIVIDEND YIELD
-        div_rate = info.get('dividendYield', 0)
-        # RUMUS DIVIDEND YIELD AKURAT & FIX
-        div_rate = info.get('dividendRate', 0) # Nominal dividen Rp per lembar
+        # PERBAIKAN RUMUS DIVIDEND YIELD AKURAT
+        div_rate = info.get('dividendRate', 0)
         if div_rate and div_rate > 0:
             div_yield_pct = (div_rate / last_price) * 100
         else:
-            # Fallback jika dividendRate kosong
             raw_yield = info.get('dividendYield', 0)
-            div_yield_pct = (raw_yield * 100) if raw_yield else 0.0
+            if raw_yield:
+                div_yield_pct = raw_yield * 100 if raw_yield < 1.0 else (raw_yield / last_price) * 100
+            else:
+                div_yield_pct = 0.0
 
         # HITUNG RSI
         delta = df['Close'].diff()
@@ -120,7 +120,7 @@ if menu == "🔍 Pre-Buy Audit & Analisis Saham":
         st.markdown("---")
         st.markdown("#### 📊 Indikator Utama & Valuasi")
         
-        # METRIK TAMPILAN HP (RESPONSIF 2 KOLOM)
+        # METRIK TAMPILAN HP
         m1, m2 = st.columns(2)
         m1.metric("Harga Terakhir", f"Rp {last_price:,.0f}")
         m2.metric("Dividend Yield", f"{div_yield_pct:.2f}%" if div_yield_pct > 0 else "0.00%")
@@ -163,17 +163,15 @@ if menu == "🔍 Pre-Buy Audit & Analisis Saham":
         else:
             st.warning("Stop Loss harus lebih kecil dari Entry!")
 
-        # CHECKLIST AUDIT
+        # CHECKLIST AUDIT OTOMATIS (FIXED)
         st.markdown("---")
         st.markdown("#### 📋 Pre-Buy Checklist")
 
-        chk_fundamental = True if per > 0 and per < 15 else False
-        chk_valuasi = True if pbv > 0 and pbv <= 1.5 else False
-        chk_dividen = True if div_yield_pct >= 3.0 else False # EVALUASI DIVIDEND YIELD >= 3%
-        chk_bisnis = True
-        chk_manajemen = True
+        chk_fundamental = True if (per > 0 and per < 15) else False
+        chk_valuasi = True if (pbv > 0 and pbv <= 1.5) else False
+        chk_dividen = True if div_yield_pct >= 3.0 else False
+        chk_trend_ma50 = True if last_price >= ma50 else False
         chk_entry_ma20 = True if entry_price <= (ma20 * 1.02) else False
-        chk_trend_ma50 = True if last_price >= ma50 else False # EVALUASI TREN DI ATAS MA50
         chk_target = True if tp_price > entry_price else False
         chk_sl = True if sl_price < entry_price else False
 
