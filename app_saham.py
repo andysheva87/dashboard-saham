@@ -1,366 +1,1292 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
+import numpy as np
 
-# CONFIG TAMPILAN DASHBOARD OPTIMIZED FOR MOBILE
-st.set_page_config(page_title="Terminal Saham Mobile Pro", layout="wide", initial_sidebar_state="collapsed")
+# ==========================================================
+# STOCK TRADING DECISION DASHBOARD V2
+# ==========================================================
 
-# CSS KHUSUS MOBILE UI
-st.markdown("""
-    <style>
-    .block-container { padding-top: 1rem; padding-bottom: 2rem; padding-left: 0.8rem; padding-right: 0.8rem; }
-    div[data-testid="stMetricValue"] { font-size: 1.1rem !important; }
-    div[data-testid="stMetricLabel"] { font-size: 0.75rem !important; }
-    .stTable { font-size: 0.8rem !important; }
-    </style>
-""", unsafe_allow_html=True)
+st.set_page_config(
+    page_title="Stock Trading Decision Dashboard V2",
+    page_icon="📊",
+    layout="wide"
+)
 
-st.title("📊 Terminal Saham Pro")
-st.caption("Pre-Buy Audit (Div Yield & MA50 Included) & Jurnal Portofolio")
+st.title("📊 Stock Trading Decision Dashboard V2")
+st.caption(
+    "Technical + Fundamental + Risk/Reward Dashboard untuk Swing Trading IDX"
+)
 
-# STATE MEMORI APLIKASI
-if 'portfolio' not in st.session_state:
-    st.session_state.portfolio = [
-        {'ticker': 'BBNI', 'lots': 5, 'avg': 3718, 'current': 3660},
-        {'ticker': 'TLKM', 'lots': 9, 'avg': 2850, 'current': 2580}
-    ]
+# ==========================================================
+# FORMAT
+# ==========================================================
 
-if 'realized' not in st.session_state:
-    st.session_state.realized = []
+def rupiah(value):
+    if value is None or pd.isna(value):
+        return "N/A"
+    return f"Rp {value:,.0f}"
 
-# DETEKSI TREN IHSG OTOMATIS
+def percent(value):
+    if value is None or pd.isna(value):
+        return "N/A"
+    return f"{value:+.2f}%"
+
+# ==========================================================
+# LOAD DATA
+# ==========================================================
+
 @st.cache_data(ttl=300)
-def get_market_status():
+def load_stock(symbol):
+
     try:
-        ihsg = yf.Ticker("^JKSE")
-        df_ihsg = ihsg.history(period="3mo")
-        if not df_ihsg.empty:
-            last_ihsg = float(df_ihsg['Close'].iloc[-1])
-            ma20_ihsg = float(df_ihsg['Close'].rolling(20).mean().iloc[-1])
-            prev_ihsg = float(df_ihsg['Close'].iloc[-5])
-            diff_pct = ((last_ihsg - prev_ihsg) / prev_ihsg) * 100
-            
-            if last_ihsg < ma20_ihsg or diff_pct < -1.0:
-                return "Bearish / Pressure Asing", last_ihsg, ma20_ihsg
-            elif last_ihsg > ma20_ihsg and diff_pct > 1.0:
-                return "Bullish / Uptrend", last_ihsg, ma20_ihsg
-            else:
-                return "Sideways / Konsolidasi", last_ihsg, ma20_ihsg
-    except:
-        pass
-    return "Sideways / Konsolidasi", 0, 0
 
-auto_market_trend, ihsg_price, ihsg_ma20 = get_market_status()
+        ticker = yf.Ticker(symbol)
 
-# NAVIGASI UTAMA
-menu = st.selectbox("📌 PILIH MENU", [
-    "🔍 Pre-Buy Audit & Analisis Saham", 
-    "💼 Portfolio Monitoring (Floating P&L)", 
-    "📜 Riwayat Transaksi (Realized P&L)"
-])
+        df = ticker.history(
+            period="1y",
+            interval="1d",
+            auto_adjust=False
+        )
 
-st.info(f"🌐 **Pasar Realtime (IHSG):** {auto_market_trend}")
-
-# =========================================================
-# MENU 1: PRE-BUY AUDIT & ANALISIS SAHAM
-# =========================================================
-if menu == "🔍 Pre-Buy Audit & Analisis Saham":
-    st.subheader("1. Pre-Buy Audit Saham")
-    
-    col_a, col_b = st.columns(2)
-    ticker_input = col_a.text_input("Kode Saham", "BBRI").upper()
-    entry_price = col_b.number_input("Harga Entry (Rp)", value=3180, step=10)
-    
-    col_c, col_d = st.columns(2)
-    tp_price = col_c.number_input("Target Price (Rp)", value=3300, step=10)
-    sl_price = col_d.number_input("Cut Loss (Rp)", value=3100, step=10)
-
-    ticker_idx = f"{ticker_input}.JK"
-
-    @st.cache_data(ttl=60)
-    def load_stock_data(symbol):
         try:
-            stock = yf.Ticker(symbol)
-            df = stock.history(period="6mo")
-            info = stock.info
-            return df, info
-        except:
-            return None, None
+            info = ticker.info
+        except Exception:
+            info = {}
 
-    df, info = load_stock_data(ticker_idx)
+        return df, info, None
 
-    if df is None or df.empty:
-        st.error(f"Data {ticker_input} tidak ditemukan!")
-    else:
-        last_price = float(df['Close'].iloc[-1])
-        ma20 = float(df['Close'].rolling(20).mean().iloc[-1])
-        ma50 = float(df['Close'].rolling(50).mean().iloc[-1])
-        
-        # Ambil data rasio dengan penanganan N/A
-        pbv_raw = info.get('priceToBook')
-        per_raw = info.get('trailingPE')
-        pbv = float(pbv_raw) if pbv_raw is not None else 0.0
-        per = float(per_raw) if per_raw is not None else 0.0
-        
-        # Kalkulasi Dividend Yield Akurat
-        div_rate = info.get('dividendRate')
-        raw_yield = info.get('dividendYield')
-        
-        if div_rate and div_rate > 0:
-            div_yield_pct = (div_rate / last_price) * 100
-        elif raw_yield and raw_yield > 0:
-            div_yield_pct = raw_yield * 100 if raw_yield < 1.0 else (raw_yield / last_price) * 100
+    except Exception as e:
+
+        return pd.DataFrame(), {}, str(e)
+
+
+# ==========================================================
+# TECHNICAL INDICATORS
+# ==========================================================
+
+def calculate_indicators(df):
+
+    data = df.copy()
+
+    close = data["Close"]
+    high = data["High"]
+    low = data["Low"]
+    volume = data["Volume"]
+
+    # MA
+    data["MA20"] = close.rolling(20).mean()
+    data["MA50"] = close.rolling(50).mean()
+    data["MA200"] = close.rolling(200).mean()
+
+    # RSI
+    delta = close.diff()
+
+    gain = delta.clip(lower=0)
+    loss = -delta.clip(upper=0)
+
+    avg_gain = gain.rolling(14).mean()
+    avg_loss = loss.rolling(14).mean()
+
+    rs = avg_gain / avg_loss.replace(0, np.nan)
+
+    data["RSI14"] = 100 - (
+        100 / (1 + rs)
+    )
+
+    # MACD
+    ema12 = close.ewm(
+        span=12,
+        adjust=False
+    ).mean()
+
+    ema26 = close.ewm(
+        span=26,
+        adjust=False
+    ).mean()
+
+    data["MACD"] = ema12 - ema26
+
+    data["MACDSignal"] = data["MACD"].ewm(
+        span=9,
+        adjust=False
+    ).mean()
+
+    data["MACDHist"] = (
+        data["MACD"]
+        - data["MACDSignal"]
+    )
+
+    # ATR
+    previous_close = close.shift(1)
+
+    tr = pd.concat(
+        [
+            high - low,
+            (high - previous_close).abs(),
+            (low - previous_close).abs()
+        ],
+        axis=1
+    ).max(axis=1)
+
+    data["ATR14"] = tr.rolling(14).mean()
+
+    # Volume
+    data["VolumeMA20"] = volume.rolling(20).mean()
+
+    data["VolumeRatio"] = (
+        volume /
+        data["VolumeMA20"]
+    )
+
+    # Support / Resistance
+    data["Support20"] = (
+        low
+        .rolling(20)
+        .min()
+        .shift(1)
+    )
+
+    data["Resistance20"] = (
+        high
+        .rolling(20)
+        .max()
+        .shift(1)
+    )
+
+    # Returns
+    data["Return5D"] = (
+        close.pct_change(5) * 100
+    )
+
+    data["Return20D"] = (
+        close.pct_change(20) * 100
+    )
+
+    return data
+
+
+# ==========================================================
+# TECHNICAL SCORE
+# ==========================================================
+
+def calculate_technical_score(data):
+
+    last = data.iloc[-1]
+
+    score = 0
+    reasons = []
+
+    # ----------------------------------
+    # TREND
+    # Maximum 20
+    # ----------------------------------
+
+    if last["Close"] > last["MA20"]:
+
+        score += 5
+        reasons.append(
+            "Harga berada di atas MA20"
+        )
+
+    if last["MA20"] > last["MA50"]:
+
+        score += 7
+        reasons.append(
+            "MA20 berada di atas MA50"
+        )
+
+    if (
+        pd.notna(last["MA200"])
+        and
+        last["Close"] > last["MA200"]
+    ):
+
+        score += 8
+        reasons.append(
+            "Harga berada di atas MA200"
+        )
+
+    # ----------------------------------
+    # MOMENTUM
+    # Maximum 15
+    # ----------------------------------
+
+    rsi = last["RSI14"]
+
+    if 50 <= rsi <= 70:
+
+        score += 8
+
+        reasons.append(
+            "RSI berada pada zona momentum sehat"
+        )
+
+    elif 45 <= rsi < 50:
+
+        score += 4
+
+    if (
+        last["MACD"]
+        >
+        last["MACDSignal"]
+    ):
+
+        score += 7
+
+        reasons.append(
+            "MACD bullish"
+        )
+
+    # ----------------------------------
+    # VOLUME
+    # Maximum 15
+    # ----------------------------------
+
+    volume_ratio = last["VolumeRatio"]
+
+    if volume_ratio >= 1.5:
+
+        score += 15
+
+        reasons.append(
+            "Volume breakout kuat"
+        )
+
+    elif volume_ratio >= 1.2:
+
+        score += 10
+
+        reasons.append(
+            "Volume di atas rata-rata"
+        )
+
+    elif volume_ratio >= 1.0:
+
+        score += 5
+
+    # ----------------------------------
+    # PRICE ACTION
+    # Maximum 20
+    # ----------------------------------
+
+    if (
+        pd.notna(last["Resistance20"])
+        and
+        last["Close"]
+        >
+        last["Resistance20"]
+    ):
+
+        score += 20
+
+        reasons.append(
+            "Breakout resistance 20 hari"
+        )
+
+    elif (
+        pd.notna(last["MA20"])
+        and
+        last["Close"] > last["MA20"]
+    ):
+
+        score += 8
+
+        reasons.append(
+            "Price action berada di atas MA20"
+        )
+
+    # ----------------------------------
+    # SUPPORT
+    # Maximum 10
+    # ----------------------------------
+
+    if pd.notna(last["Support20"]):
+
+        distance = (
+            last["Close"]
+            -
+            last["Support20"]
+        ) / last["Close"]
+
+        if 0 <= distance <= 0.05:
+
+            score += 10
+
+            reasons.append(
+                "Harga relatif dekat dengan support"
+            )
+
+    return min(score, 80), reasons
+
+
+# ==========================================================
+# FUNDAMENTAL SCORE
+# ==========================================================
+
+def calculate_fundamental_score(info):
+
+    score = 0
+    reasons = []
+
+    per = info.get("trailingPE")
+    pbv = info.get("priceToBook")
+    roe = info.get("returnOnEquity")
+    growth = info.get("earningsGrowth")
+
+    # PER
+
+    if per is not None and per > 0:
+
+        if per <= 12:
+
+            score += 3
+
+            reasons.append(
+                "PER relatif rendah"
+            )
+
+        elif per <= 20:
+
+            score += 2
+
         else:
-            div_yield_pct = 0.0
 
-        # HITUNG RSI
-        delta = df['Close'].diff()
-        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-        rs = gain / loss
-        rsi = 100 - (100 / (1 + rs)).iloc[-1]
+            score += 1
 
-        st.markdown("---")
-        st.markdown("#### 📊 Indikator Utama & Valuasi")
-        
-        # METRIK TAMPILAN HP
-        m1, m2 = st.columns(2)
-        m1.metric("Harga Terakhir", f"Rp {last_price:,.0f}")
-        m2.metric("Dividend Yield", f"{div_yield_pct:.2f}%" if div_yield_pct > 0 else "N/A (Pending)")
+    # PBV
 
-        m3, m4 = st.columns(2)
-        m3.metric("Support MA20", f"Rp {ma20:,.0f}")
-        m4.metric("Support MA50", f"Rp {ma50:,.0f}")
+    if pbv is not None and pbv > 0:
 
-        m5, m6 = st.columns(2)
-        m5.metric("PBV", f"{pbv:.2f}x" if pbv > 0 else "N/A")
-        m6.metric("PER", f"{per:.2f}x" if per > 0 else "N/A")
-        
-        rsi_status = "Netral"
-        if rsi < 35: rsi_status = "Oversold"
-        elif rsi > 70: rsi_status = "Overbought"
-        st.metric("RSI Momentum", f"{rsi:.1f}", rsi_status)
+        if pbv <= 1.5:
 
-        # TREN HARI MINGGUAN
-        with st.expander("📈 Tren Harga 1 Minggu Kebelakang"):
-            df_1w = df.tail(5).copy()
-            df_1w['Tanggal'] = df_1w.index.strftime('%m-%d')
-            df_1w['Chg (%)'] = ((df_1w['Close'] - df_1w['Open']) / df_1w['Open']) * 100
-            df_display = df_1w[['Tanggal', 'Close', 'Chg (%)']]
-            st.dataframe(df_display.sort_values(by='Tanggal', ascending=False), use_container_width=True)
+            score += 3
 
-        # MONEY MANAGEMENT
-        st.markdown("---")
-        st.markdown("#### 🎯 Money Management (Lot Max)")
-        total_rdn = st.number_input("Modal RDN (Rp)", value=10000000, step=500000)
-        risk_pct_max = st.slider("Toleransi Risiko (%)", 1.0, 5.0, 2.0)
+            reasons.append(
+                "PBV relatif menarik"
+            )
 
-        risk_per_share = entry_price - sl_price
-        if risk_per_share > 0:
-            max_loss_rp = total_rdn * (risk_pct_max / 100)
-            max_shares = max_loss_rp / risk_per_share
-            max_lots = int(max_shares / 100)
-            total_buy_val = max_lots * 100 * entry_price
+        elif pbv <= 3:
 
-            st.success(f"💡 Max Beli: **{max_lots} Lot** (Total: Rp {total_buy_val:,.0f})")
+            score += 2
+
         else:
-            st.warning("Stop Loss harus lebih kecil dari Entry!")
 
-        # CHECKLIST AUDIT OTOMATIS (SMART PROTEKSI)
-        st.markdown("---")
-        st.markdown("#### 📋 Pre-Buy Checklist")
+            score += 1
 
-        is_bigcap = ticker_input in ['BBRI', 'BBNI', 'BMRI', 'BBCA', 'TLKM', 'ASII', 'PGAS', 'JPFA']
+    # ROE
 
-        chk_fundamental = True if (0 < per < 15) or (per == 0 and is_bigcap) else False
-        chk_valuasi = True if (0 < pbv <= 1.5) or (pbv == 0 and is_bigcap) else False
-        chk_dividen = True if (div_yield_pct >= 3.0) or (div_yield_pct == 0 and is_bigcap) else False
-        chk_trend_ma50 = True if last_price >= (ma50 * 0.98) else False
-        chk_entry_ma20 = True if entry_price <= (ma20 * 1.03) else False
-        chk_target = True if tp_price > entry_price else False
-        chk_sl = True if sl_price < entry_price else False
+    if roe is not None:
 
-        checklist_items = [
-            ("Fundamental PER < 15x", chk_fundamental),
-            ("Valuasi PBV <= 1.5x", chk_valuasi),
-            ("Dividend Yield Menarik (>= 3%)", chk_dividen),
-            ("Tren Sehat (Harga di atas MA50)", chk_trend_ma50),
-            ("Entry Dekat Support MA20", chk_entry_ma20),
-            ("Target Price Realistis", chk_target),
-            ("Stop Loss Terpasang", chk_sl)
-        ]
+        if roe >= 0.15:
 
-        for item, status in checklist_items:
-            st.write(f"{'✅' if status else '❌'} {item}")
+            score += 2
 
-        total_score = sum([chk_fundamental, chk_valuasi, chk_dividen, chk_trend_ma50, chk_entry_ma20, chk_target, chk_sl])
-        gain_pct = ((tp_price - entry_price) / entry_price) * 100
-        risk_pct = ((entry_price - sl_price) / entry_price) * 100
-        rrr = gain_pct / risk_pct if risk_pct > 0 else 0
+            reasons.append(
+                "ROE kuat"
+            )
 
-        st.markdown("---")
-        st.write(f"**Gain:** :green[+{gain_pct:.2f}%] | **Risk:** :red[-{risk_pct:.2f}%]")
-        st.write(f"**RRR:** **1 : {rrr:.2f}** | **Skor:** **{total_score}/7**")
+        elif roe >= 0.10:
 
-        if total_score < 4:
-            st.error("🚨 REJECT: Skor di bawah 4/7.")
-        elif rrr < 1.5:
-            st.warning(f"⚠️ WAIT & SEE: RRR (1:{rrr:.2f}) terlalu kecil.")
-        else:
-            if auto_market_trend == "Bearish / Pressure Asing" and rrr < 3.0:
-                st.warning(f"⚠️ WAIT & SEE: Pasar Bearish. Butuh RRR >= 1:3.0.")
-            else:
-                st.success(f"🎉 APPROVED / LAYAK BUY!")
+            score += 1
+
+    # Earnings growth
+
+    if (
+        growth is not None
+        and
+        growth > 0
+    ):
+
+        score += 2
+
+        reasons.append(
+            "Pertumbuhan laba positif"
+        )
+
+    return min(score, 10), reasons
 
 
-# =========================================================
-# MENU 2: PORTFOLIO MONITORING (FLOATING P&L)
-# =========================================================
-# =========================================================
-# MENU 2: PORTFOLIO MONITORING (FLOATING P&L REALTIME)
-# =========================================================
-# =========================================================
-# MENU 2: PORTFOLIO MONITORING (WITH EDIT, DELETE & AUTO AVERAGE)
-# =========================================================
-elif menu == "💼 Portfolio Monitoring (Floating P&L)":
-    st.subheader("2. Portofolio Aktif (Realtime Market Price)")
+# ==========================================================
+# TRADE PLAN
+# ==========================================================
 
-    # EXPANDER TAMBAH POSISI SAHAM BARU ATAU AVERAGE DOWN/UP
-    with st.expander("➕ Tambah Posisi Saham / Average Down"):
-        new_ticker = st.text_input("Kode Saham", "BBNI").upper().strip()
-        new_lots = st.number_input("Jumlah Lot Tambahan", min_value=1, value=5)
-        new_price = st.number_input("Harga Beli / Eksekusi (Rp)", min_value=1, value=3650)
-        
-        if st.button("Simpan / Gabungkan Posisi"):
-            # Cek apakah saham sudah ada di portofolio
-            existing_item = next((item for item in st.session_state.portfolio if item['ticker'] == new_ticker), None)
-            
-            if existing_item:
-                # LOGIKA OTOMATIS AVERAGE PRICE
-                old_lots = existing_item['lots']
-                old_avg = existing_item['avg']
-                
-                total_lots = old_lots + new_lots
-                total_modal = (old_lots * 100 * old_avg) + (new_lots * 100 * new_price)
-                new_combined_avg = round(total_modal / (total_lots * 100))
-                
-                existing_item['lots'] = total_lots
-                existing_item['avg'] = new_combined_avg
-                st.success(f"Berhasil menggabungkan {new_ticker}! Total Lot: {total_lots} | Average Baru: Rp {new_combined_avg:,.0f}")
-            else:
-                # Jika saham belum ada, buat baris posisi baru
-                st.session_state.portfolio.append({
-                    'ticker': new_ticker, 'lots': new_lots, 'avg': new_price
-                })
-                st.success(f"Posisi baru {new_ticker} berhasil ditambahkan!")
-            
-            st.rerun()
+def calculate_trade_plan(data):
 
-    if not st.session_state.portfolio:
-        st.info("Portofolio kamu saat ini kosong.")
+    last = data.iloc[-1]
+
+    price = float(last["Close"])
+
+    atr = (
+        float(last["ATR14"])
+        if pd.notna(last["ATR14"])
+        else price * 0.03
+    )
+
+    support = (
+        float(last["Support20"])
+        if pd.notna(last["Support20"])
+        else price - atr
+    )
+
+    resistance = (
+        float(last["Resistance20"])
+        if pd.notna(last["Resistance20"])
+        else price + atr * 2
+    )
+
+    ma20 = (
+        float(last["MA20"])
+        if pd.notna(last["MA20"])
+        else price
+    )
+
+    # ENTRY
+
+    entry_low = min(
+        price,
+        ma20,
+        support
+    )
+
+    entry_high = max(
+        price,
+        ma20
+    )
+
+    if entry_high > price * 1.03:
+
+        entry_high = price * 1.03
+
+    # STOP LOSS
+
+    sl = min(
+        support - atr * 0.25,
+        price - atr * 1.2
+    )
+
+    if sl <= 0:
+
+        sl = price * 0.95
+
+    # RISK
+
+    risk = entry_high - sl
+
+    # TP
+
+    tp1 = max(
+        resistance,
+        entry_high + risk * 2
+    )
+
+    tp2 = (
+        entry_high
+        +
+        risk * 3
+    )
+
+    risk_pct = (
+        (entry_high - sl)
+        /
+        entry_high
+    ) * 100
+
+    gain_pct = (
+        (tp1 - entry_high)
+        /
+        entry_high
+    ) * 100
+
+    rr = (
+        gain_pct / risk_pct
+        if risk_pct > 0
+        else 0
+    )
+
+    return {
+
+        "price": price,
+
+        "entry_low": entry_low,
+
+        "entry_high": entry_high,
+
+        "sl": sl,
+
+        "tp1": tp1,
+
+        "tp2": tp2,
+
+        "support": support,
+
+        "resistance": resistance,
+
+        "risk_pct": risk_pct,
+
+        "gain_pct": gain_pct,
+
+        "rr": rr
+    }
+
+
+# ==========================================================
+# R:R SCORE
+# ==========================================================
+
+def calculate_rr_score(rr):
+
+    if rr >= 3:
+
+        return 10
+
+    elif rr >= 2:
+
+        return 8
+
+    elif rr >= 1.5:
+
+        return 5
+
+    elif rr >= 1:
+
+        return 2
+
+    return 0
+
+
+# ==========================================================
+# SIGNAL
+# ==========================================================
+
+def generate_signal(
+    score,
+    rr,
+    price,
+    ma20
+):
+
+    if (
+        score >= 80
+        and
+        rr >= 2
+        and
+        price >= ma20
+    ):
+
+        return "🟢 BUY"
+
+    elif (
+        score >= 70
+        and
+        rr >= 2
+    ):
+
+        return "🟡 BUY ON WEAKNESS"
+
+    elif score >= 60:
+
+        return "⚪ WATCH / WAIT"
+
     else:
-        tot_modal = 0
-        tot_floating = 0
 
-        st.markdown("---")
-        for idx, item in enumerate(st.session_state.portfolio):
-            ticker_idx = f"{item['ticker']}.JK"
-            
-            # Tarik harga realtime dari Yahoo Finance
-            try:
-                stock_data = yf.Ticker(ticker_idx)
-                hist = stock_data.history(period="1d")
-                if not hist.empty:
-                    current_price = float(hist['Close'].iloc[-1])
-                else:
-                    current_price = item.get('current', item['avg'])
-            except:
-                current_price = item.get('current', item['avg'])
+        return "🔴 AVOID"
 
-            modal = item['lots'] * 100 * item['avg']
-            val_current = item['lots'] * 100 * current_price
-            float_rp = val_current - modal
-            float_pct = (float_rp / modal) * 100 if modal > 0 else 0
 
-            tot_modal += modal
-            tot_floating += float_rp
+# ==========================================================
+# SIDEBAR
+# ==========================================================
 
-            # TAMPILAN KARTU PORTOFOLIO LENGKAP DENGAN AKSES EDIT & HAPUS
-            with st.container():
-                col_head1, col_head2 = st.columns([3, 1])
-                col_head1.markdown(f"### {item['ticker']} ({item['lots']} Lot)")
-                
-                st.write(f"Avg: **Rp {item['avg']:,.0f}** | Market Now: **Rp {current_price:,.0f}**")
-                
-                if float_rp >= 0:
-                    st.markdown(f"Floating P&L: :green[**+Rp {float_rp:,.0f} (+{float_pct:.2f}%)**]")
-                else:
-                    st.markdown(f"Floating P&L: :red[**Rp {float_rp:,.0f} ({float_pct:.2f}%)**]")
+st.sidebar.header(
+    "⚙️ Parameter Analisis"
+)
 
-                # EXPANDER KHUSUS APLIKASI UNTUK EDIT & HAPUS POSISI
-                with st.expander(f"⚙️ Kelola Posisi {item['ticker']}"):
-                    col_edit1, col_edit2 = st.columns(2)
-                    edit_lots = col_edit1.number_input(f"Edit Lot ({item['ticker']})", min_value=1, value=int(item['lots']), key=f"edit_lots_{idx}")
-                    edit_avg = col_edit2.number_input(f"Edit Avg ({item['ticker']})", min_value=1, value=int(item['avg']), key=f"edit_avg_{idx}")
-                    
-                    btn_c1, btn_c2 = st.columns(2)
-                    if btn_c1.button("💾 Simpan Perubahan", key=f"btn_save_{idx}"):
-                        st.session_state.portfolio[idx]['lots'] = edit_lots
-                        st.session_state.portfolio[idx]['avg'] = edit_avg
-                        st.success("Posisi berhasil diperbarui!")
-                        st.rerun()
-                        
-                    if btn_c2.button("🗑️ Hapus Posisi Ini", key=f"btn_del_{idx}"):
-                        st.session_state.portfolio.pop(idx)
-                        st.warning(f"Posisi {item['ticker']} berhasil dihapus.")
-                        st.rerun()
+ticker_input = st.sidebar.text_input(
+    "Kode Saham IDX",
+    "BBNI"
+).strip().upper()
 
-                st.markdown("---")
+entry_manual = st.sidebar.number_input(
+    "Entry Manual (opsional)",
+    min_value=0.0,
+    value=0.0,
+    step=10.0
+)
 
-        # SUMMARY TOTAL FLOATING METRIC
-        c1, c2 = st.columns(2)
-        c1.metric("Modal Aktif", f"Rp {tot_modal:,.0f}")
-        c2.metric("Total Floating P&L", f"Rp {tot_floating:,.0f}", f"{(tot_floating/tot_modal)*100:.2f}%" if tot_modal > 0 else "0%")
+capital = st.sidebar.number_input(
+    "Modal Posisi",
+    min_value=100000.0,
+    value=1000000.0,
+    step=100000.0
+)
 
-        # MODUL EKSEKUSI JUAL (REALIZED)
-        st.markdown("---")
-        st.subheader("Eksekusi Jual / Close Position")
-        selected_idx = st.selectbox("Pilih Saham yang Dijual", range(len(st.session_state.portfolio)), format_func=lambda x: st.session_state.portfolio[x]['ticker'])
-        
-        selected_item = st.session_state.portfolio[selected_idx]
-        try:
-            default_sell = float(yf.Ticker(f"{selected_item['ticker']}.JK").history(period="1d")['Close'].iloc[-1])
-        except:
-            default_sell = selected_item['avg']
+risk_percent = st.sidebar.slider(
+    "Risiko Maksimum / Trade",
+    min_value=0.25,
+    max_value=2.0,
+    value=1.0,
+    step=0.25
+)
 
-        sell_price = st.number_input("Harga Jual Eksekusi (Rp)", value=int(default_sell))
-        
-        if st.button("Jual & Catat Realized P&L"):
-            item_sold = st.session_state.portfolio.pop(selected_idx)
-            modal_sold = item_sold['lots'] * 100 * item_sold['avg']
-            realized_rp = (item_sold['lots'] * 100 * sell_price) - modal_sold
+st.sidebar.markdown("---")
 
-            st.session_state.realized.append({
-                'ticker': item_sold['ticker'], 'lots': item_sold['lots'], 'avg': item_sold['avg'],
-                'sell_price': sell_price, 'realized_rp': realized_rp,
-                'status': 'TAKE PROFIT' if realized_rp >= 0 else 'CUT LOSS'
-            })
-            st.success(f"Posisi {item_sold['ticker']} Berhasil Ditutup!")
-            st.rerun()
-# =========================================================
-# MENU 3: RIWAYAT TRANSAKSI (REALIZED P&L)
-# =========================================================
-elif menu == "📜 Riwayat Transaksi (Realized P&L)":
-    st.subheader("3. Jurnal Realized P&L")
+st.sidebar.info(
+    "Target 5% bukan kewajiban setiap transaksi. "
+    "Prioritas sistem adalah setup dengan risk/reward yang sehat."
+)
 
-    if not st.session_state.realized:
-        st.info("Belum ada riwayat transaksi ditutup.")
+# ==========================================================
+# LOAD STOCK
+# ==========================================================
+
+symbol = f"{ticker_input}.JK"
+
+df, info, error = load_stock(
+    symbol
+)
+
+if error or df.empty:
+
+    st.error(
+        f"Gagal mengambil data saham {ticker_input}."
+    )
+
+    if error:
+        st.code(error)
+
+    st.stop()
+
+# ==========================================================
+# INDICATORS
+# ==========================================================
+
+df = calculate_indicators(df)
+
+last = df.iloc[-1]
+
+technical_score, technical_reasons = (
+    calculate_technical_score(df)
+)
+
+fundamental_score, fundamental_reasons = (
+    calculate_fundamental_score(info)
+)
+
+trade = calculate_trade_plan(df)
+
+rr_score = calculate_rr_score(
+    trade["rr"]
+)
+
+total_score = min(
+    technical_score
+    +
+    fundamental_score
+    +
+    rr_score,
+    100
+)
+
+signal = generate_signal(
+    total_score,
+    trade["rr"],
+    last["Close"],
+    last["MA20"]
+)
+
+# ==========================================================
+# HEADER
+# ==========================================================
+
+st.subheader(
+    f"1️⃣ {ticker_input} — Trading Decision"
+)
+
+c1, c2, c3, c4, c5 = st.columns(5)
+
+c1.metric(
+    "Harga",
+    rupiah(last["Close"])
+)
+
+c2.metric(
+    "MA20",
+    rupiah(last["MA20"])
+)
+
+c3.metric(
+    "MA50",
+    rupiah(last["MA50"])
+)
+
+c4.metric(
+    "RSI",
+    f"{last['RSI14']:.1f}"
+)
+
+c5.metric(
+    "Volume Ratio",
+    f"{last['VolumeRatio']:.2f}x"
+)
+
+st.success(
+    f"Signal: **{signal}** | "
+    f"Score: **{total_score}/100** | "
+    f"Data terakhir: "
+    f"**{df.index[-1].strftime('%d-%m-%Y')}**"
+)
+
+# ==========================================================
+# TRADE PLAN
+# ==========================================================
+
+st.subheader(
+    "2️⃣ Automatic Trade Plan"
+)
+
+c1, c2, c3, c4, c5 = st.columns(5)
+
+c1.metric(
+    "Entry Zone",
+    f"{rupiah(trade['entry_low'])} - "
+    f"{rupiah(trade['entry_high'])}"
+)
+
+c2.metric(
+    "Stop Loss",
+    rupiah(trade["sl"])
+)
+
+c3.metric(
+    "TP1",
+    rupiah(trade["tp1"])
+)
+
+c4.metric(
+    "TP2",
+    rupiah(trade["tp2"])
+)
+
+c5.metric(
+    "Risk / Reward",
+    f"1 : {trade['rr']:.2f}"
+)
+
+c1, c2, c3, c4 = st.columns(4)
+
+c1.metric(
+    "Risk",
+    f"-{trade['risk_pct']:.2f}%"
+)
+
+c2.metric(
+    "Potensi TP1",
+    f"+{trade['gain_pct']:.2f}%"
+)
+
+c3.metric(
+    "Support",
+    rupiah(trade["support"])
+)
+
+c4.metric(
+    "Resistance",
+    rupiah(trade["resistance"])
+)
+
+# ==========================================================
+# SCORE
+# ==========================================================
+
+st.subheader(
+    "3️⃣ Score Breakdown"
+)
+
+score_table = pd.DataFrame({
+
+    "Komponen": [
+        "Technical",
+        "Fundamental",
+        "Risk / Reward",
+        "TOTAL"
+    ],
+
+    "Score": [
+        technical_score,
+        fundamental_score,
+        rr_score,
+        total_score
+    ],
+
+    "Maximum": [
+        80,
+        10,
+        10,
+        100
+    ]
+})
+
+st.dataframe(
+    score_table,
+    use_container_width=True,
+    hide_index=True
+)
+
+# ==========================================================
+# REASONS
+# ==========================================================
+
+left, right = st.columns(2)
+
+with left:
+
+    st.markdown(
+        "### ✅ Faktor Positif"
+    )
+
+    reasons = (
+        technical_reasons
+        +
+        fundamental_reasons
+    )
+
+    if reasons:
+
+        for reason in reasons:
+
+            st.write(
+                "•",
+                reason
+            )
+
     else:
-        tot_realized = sum([x['realized_rp'] for x in st.session_state.realized])
-        st.metric("Total Realized P&L", f"Rp {tot_realized:,.0f}")
 
-        for x in st.session_state.realized:
-            st.markdown(f"**{x['ticker']}** ({x['lots']} Lot) - **{x['status']}**")
-            st.write(f"Beli: Rp {x['avg']:,.0f} | Jual: Rp {x['sell_price']:,.0f}")
-            st.write(f"Gain/Loss: **Rp {x['realized_rp']:,.0f}**")
-            st.markdown("---")
+        st.write(
+            "Belum terdapat faktor positif kuat."
+        )
+
+with right:
+
+    st.markdown(
+        "### ⚠️ Risiko / Warning"
+    )
+
+    warnings = []
+
+    if last["Close"] < last["MA20"]:
+
+        warnings.append(
+            "Harga berada di bawah MA20"
+        )
+
+    if last["MA20"] < last["MA50"]:
+
+        warnings.append(
+            "MA20 berada di bawah MA50"
+        )
+
+    if last["RSI14"] < 45:
+
+        warnings.append(
+            "Momentum relatif lemah"
+        )
+
+    if last["VolumeRatio"] < 0.8:
+
+        warnings.append(
+            "Volume berada di bawah rata-rata"
+        )
+
+    if trade["rr"] < 2:
+
+        warnings.append(
+            "Risk/Reward belum mencapai 1:2"
+        )
+
+    if not warnings:
+
+        warnings.append(
+            "Tidak ada warning besar."
+        )
+
+    for warning in warnings:
+
+        st.write(
+            "•",
+            warning
+        )
+
+# ==========================================================
+# FUNDAMENTAL
+# ==========================================================
+
+st.subheader(
+    "4️⃣ Fundamental Snapshot"
+)
+
+per = info.get(
+    "trailingPE"
+)
+
+pbv = info.get(
+    "priceToBook"
+)
+
+roe = info.get(
+    "returnOnEquity"
+)
+
+growth = info.get(
+    "earningsGrowth"
+)
+
+dividend = info.get(
+    "dividendYield"
+)
+
+fundamental_table = pd.DataFrame({
+
+    "Metric": [
+        "PER",
+        "PBV",
+        "ROE",
+        "Earnings Growth",
+        "Dividend Yield"
+    ],
+
+    "Value": [
+
+        f"{per:.2f}x"
+        if per
+        else "N/A",
+
+        f"{pbv:.2f}x"
+        if pbv
+        else "N/A",
+
+        f"{roe * 100:.2f}%"
+        if roe
+        else "N/A",
+
+        f"{growth * 100:.2f}%"
+        if growth
+        else "N/A",
+
+        f"{dividend * 100:.2f}%"
+        if dividend
+        else "N/A"
+    ]
+})
+
+st.dataframe(
+    fundamental_table,
+    use_container_width=True,
+    hide_index=True
+)
+
+# ==========================================================
+# MANUAL ENTRY AUDIT
+# ==========================================================
+
+st.subheader(
+    "5️⃣ Audit Entry Manual"
+)
+
+if entry_manual > 0:
+
+    manual_risk = (
+        (entry_manual - trade["sl"])
+        /
+        entry_manual
+    ) * 100
+
+    manual_gain = (
+        (trade["tp1"] - entry_manual)
+        /
+        entry_manual
+    ) * 100
+
+    manual_rr = (
+        manual_gain / manual_risk
+        if manual_risk > 0
+        else 0
+    )
+
+    c1, c2, c3 = st.columns(3)
+
+    c1.metric(
+        "Entry Manual",
+        rupiah(entry_manual)
+    )
+
+    c2.metric(
+        "Potensi TP1",
+        f"{manual_gain:+.2f}%"
+    )
+
+    c3.metric(
+        "R:R Manual",
+        f"1 : {manual_rr:.2f}"
+    )
+
+    if (
+        entry_manual >= trade["entry_low"]
+        and
+        entry_manual <= trade["entry_high"]
+    ):
+
+        st.success(
+            "Entry berada di dalam zona entry."
+        )
+
+    elif entry_manual < trade["entry_low"]:
+
+        st.info(
+            "Entry berada lebih rendah dari zona entry. "
+            "Potensi menarik, tetapi tunggu konfirmasi."
+        )
+
+    else:
+
+        st.warning(
+            "Entry terlalu tinggi dibanding zona entry."
+        )
+
+# ==========================================================
+# POSITION SIZING
+# ==========================================================
+
+st.subheader(
+    "6️⃣ Position Sizing"
+)
+
+maximum_loss = (
+    capital
+    *
+    risk_percent
+    /
+    100
+)
+
+entry_for_size = (
+    entry_manual
+    if entry_manual > 0
+    else trade["entry_high"]
+)
+
+risk_per_share = max(
+    entry_for_size - trade["sl"],
+    1
+)
+
+shares = int(
+    maximum_loss
+    /
+    risk_per_share
+)
+
+lots = shares // 100
+
+capital_used = (
+    lots
+    *
+    100
+    *
+    entry_for_size
+)
+
+c1, c2, c3 = st.columns(3)
+
+c1.metric(
+    "Maksimum Risiko",
+    rupiah(maximum_loss)
+)
+
+c2.metric(
+    "Estimasi Lot",
+    f"{lots} lot"
+)
+
+c3.metric(
+    "Modal Terpakai",
+    rupiah(capital_used)
+)
+
+st.caption(
+    "Position sizing menjaga potensi kerugian sampai Stop Loss "
+    "agar mendekati batas risiko yang dipilih."
+)
+
+# ==========================================================
+# CHART
+# ==========================================================
+
+st.subheader(
+    "7️⃣ Price Trend"
+)
+
+chart_data = df[
+    [
+        "Close",
+        "MA20",
+        "MA50",
+        "MA200"
+    ]
+].tail(120)
+
+st.line_chart(
+    chart_data
+)
+
+# ==========================================================
+# PORTFOLIO MONITOR
+# ==========================================================
+
+st.subheader(
+    "8️⃣ Portfolio Monitor"
+)
+
+portfolio = pd.DataFrame({
+
+    "Kode": [
+        "BBNI",
+        "TLKM"
+    ],
+
+    "Lot": [
+        10,
+        9
+    ],
+
+    "Avg": [
+        3603,
+        2853
+    ]
+})
+
+portfolio_result = []
+
+for _, row in portfolio.iterrows():
+
+    code = row["Kode"]
+
+    stock_df, _, _ = load_stock(
+        f"{code}.JK"
+    )
+
+    if stock_df.empty:
+        continue
+
+    current = float(
+        stock_df["Close"].iloc[-1]
+    )
+
+    quantity = (
+        row["Lot"]
+        *
+        100
+    )
+
+    cost = (
+        row["Avg"]
+        *
+        quantity
+    )
+
+    market_value = (
+        current
+        *
+        quantity
+    )
+
+    pnl = (
+        market_value
+        -
+        cost
+    )
+
+    pnl_percent = (
+        pnl / cost
+    ) * 100
+
+    portfolio_result.append({
+
+        "Kode": code,
+
+        "Lot": row["Lot"],
+
+        "Avg": rupiah(
+            row["Avg"]
+        ),
+
+        "Harga": rupiah(
+            current
+        ),
+
+        "Nilai": rupiah(
+            market_value
+        ),
+
+        "P/L": rupiah(
+            pnl
+        ),
+
+        "P/L %": f"{pnl_percent:+.2f}%"
+    })
+
+if portfolio_result:
+
+    st.dataframe(
+        pd.DataFrame(
+            portfolio_result
+        ),
+        use_container_width=True,
+        hide_index=True
+    )
+
+# ==========================================================
+# SIMPLE ACTION GUIDE
+# ==========================================================
+
+st.subheader(
+    "9️⃣ Decision Guide"
+)
+
+if signal == "🟢 BUY":
+
+    st.success(
+        "BUY: setup memenuhi skor, momentum, dan Risk/Reward. "
+        "Tetap gunakan Stop Loss."
+    )
+
+elif signal == "🟡 BUY ON WEAKNESS":
+
+    st.warning(
+        "BUY ON WEAKNESS: jangan mengejar harga. "
+        "Tunggu harga masuk Entry Zone."
+    )
+
+elif signal == "⚪ WATCH / WAIT":
+
+    st.info(
+        "WAIT: belum cukup kuat untuk entry agresif."
+    )
+
+else:
+
+    st.error(
+        "AVOID: setup belum memenuhi standar trading."
+    )
+
+# ==========================================================
+# FOOTER
+# ==========================================================
+
+st.markdown("---")
+
+st.caption(
+    "Stock Trading Decision Dashboard V2 | "
+    "MA20/50/200 • RSI • MACD • ATR • Volume • "
+    "Support/Resistance • Fundamental • R:R • "
+    "Position Sizing • Portfolio"
+)
