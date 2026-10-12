@@ -32,6 +32,17 @@ RISK_PER_TRADE_PCT = float(os.getenv("RISK_PER_TRADE_PCT", "1.0"))
 MAX_POSITION_PCT = float(os.getenv("MAX_POSITION_PCT", "25"))
 MAX_DRAWDOWN_PCT = float(os.getenv("MAX_DRAWDOWN_PCT", "10"))
 
+# ---------------- Stock universes ----------------
+# Seed constituents for the period 2026-08-03 to 2026-10-30.
+# These lists are editable in the app; confirm against the latest IDX publication after each review.
+DEFAULT_WATCHLIST = "ANTM,ASII,BBNI,BBRI,BBCA,BMRI,TLKM,INCO,MDKA,PGAS,ADRO,UNTR,ICBP,KLBF,AMRT,CPIN,BRIS"
+INDEX_LIST_UPDATED = "2026-08-03 s.d. 2026-10-30 (seed awal; verifikasi sebelum digunakan)"
+INDEX_SOURCE_URL = "https://www.idx.id/id/data-pasar/laporan-statistik/fact-sheet-index"
+DEFAULT_LQ45 = "AADI,ADMR,ADRO,AKRA,AMMN,AMRT,ANTM,ASII,BBCA,BBNI,BBRI,BBTN,BMRI,BRPT,BUMI,CPIN,CUAN,DEWA,EMTK,ESSA,EXCL,GOTO,HRTA,ICBP,INCO,INDF,INDY,INKP,ISAT,ITMG,JPFA,KLBF,MAPI,MBMA,MDKA,MEDC,NCKL,PGAS,PGEO,PTBA,SCMA,TLKM,UNTR,UNVR,WIFI"
+DEFAULT_IDX30 = "AADI,ADMR,ADRO,AMRT,ANTM,ASII,BBCA,BBNI,BBRI,BMRI,BRPT,BUMI,CPIN,DEWA,EMTK,GOTO,ICBP,INCO,INDF,INKP,JPFA,KLBF,MBMA,MDKA,MEDC,PGAS,PGEO,TLKM,UNTR,UNVR"
+# Broad candidate pool for the liquidity filter. It is a starting universe, not a claim to include every IDX listing.
+LIQUID_CANDIDATES = "AADI,ADMR,ADRO,AGII,AKRA,AMMN,AMRT,ANTM,ARTO,ASII,BBCA,BBNI,BBRI,BBTN,BDMN,BFIN,BMRI,BRIS,BRPT,BSDE,BUKA,BUMI,CMRY,CPIN,CTRA,CUAN,DEWA,DSNG,ELSA,EMTK,ENRG,ERAA,ESSA,EXCL,GOTO,HEAL,HRTA,ICBP,INCO,INDF,INDY,INKP,ISAT,ITMG,JPFA,KIJA,KLBF,MAPA,MAPI,MBMA,MDKA,MEDC,MIKA,NCKL,PGAS,PGEO,PTBA,PTRO,RAJA,SCMA,SMGR,TAPG,TLKM,TOWR,UNTR,UNVR,WIFI"
+
 # ---------------- SQLite database ----------------
 def db_connect():
     conn = sqlite3.connect(DB_PATH, timeout=20, check_same_thread=False)
@@ -69,12 +80,69 @@ def init_db():
           equity_value REAL NOT NULL DEFAULT 0, note TEXT);
         """)
         conn.execute("INSERT OR IGNORE INTO risk_limits(id,risk_per_trade_pct,max_position_pct,max_drawdown_pct,portfolio_reference_value) VALUES(1,?,?,?,0)", (RISK_PER_TRADE_PCT, MAX_POSITION_PCT, MAX_DRAWDOWN_PCT))
+        seed_settings = {
+            "watchlist_symbols": DEFAULT_WATCHLIST,
+            "index_lq45_symbols": DEFAULT_LQ45,
+            "index_idx30_symbols": DEFAULT_IDX30,
+            "index_list_updated": INDEX_LIST_UPDATED,
+        }
+        for key, value in seed_settings.items():
+            conn.execute("INSERT OR IGNORE INTO app_settings(setting_key,setting_value) VALUES(?,?)", (key, value))
         n=conn.execute("SELECT COUNT(*) FROM transactions").fetchone()[0]
         if n == 0:
             for symbol,lots,price in [("BBNI.JK",10,3603),("TLKM.JK",9,2853)]:
                 shares=lots*100; gross=shares*price
                 conn.execute("INSERT INTO transactions(txn_time,symbol,txn_type,lots,price,gross_amount,fee_amount,realized_pnl,notes) VALUES(?,?,?,?,?,?,?,?,?)", (datetime.now().isoformat(timespec="seconds"),symbol,"OPENING",lots,price,gross,0,None,"Saldo awal pengguna; fee historis tidak diketahui"))
                 conn.execute("INSERT OR IGNORE INTO holdings(symbol,shares,avg_cost_per_share,total_cost) VALUES(?,?,?,?)",(symbol,shares,price,gross))
+
+def get_app_setting(key, default=""):
+    rows = db_query("SELECT setting_value FROM app_settings WHERE setting_key=?", (key,))
+    return rows[0]["setting_value"] if rows else default
+
+def set_app_setting(key, value):
+    with db_connect() as conn:
+        conn.execute("INSERT INTO app_settings(setting_key,setting_value,updated_at) VALUES(?,?,CURRENT_TIMESTAMP) ON CONFLICT(setting_key) DO UPDATE SET setting_value=excluded.setting_value,updated_at=CURRENT_TIMESTAMP", (key, str(value)))
+
+def normalize_symbols(text):
+    symbols = []
+    for item in str(text or "").replace(";", ",").replace("\n", ",").split(","):
+        code = item.strip().upper().replace(" ", "")
+        if not code:
+            continue
+        if code.endswith(".JK"):
+            base = code[:-3]
+        else:
+            base = code
+        if base.isalnum() and 1 <= len(base) <= 6:
+            symbol = base + ".JK"
+            if symbol not in symbols:
+                symbols.append(symbol)
+    return symbols
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def screen_liquid_universe(candidate_symbols, lookback=20, min_avg_value=5_000_000_000, min_avg_volume=1_000_000):
+    """Screen a seed candidate pool using approximate close x volume turnover."""
+    passed, rejected, failures = [], [], 0
+    for symbol in candidate_symbols:
+        df = download_daily(symbol, period="6mo")
+        if df.empty or "Volume" not in df.columns or len(df) < max(15, int(lookback)):
+            failures += 1
+            rejected.append({"Kode": symbol.replace(".JK", ""), "Rata-rata nilai transaksi": None, "Rata-rata volume": None, "Status": "Data tidak cukup"})
+            continue
+        d = df.dropna(subset=["Close", "Volume"]).tail(int(lookback)).copy()
+        if len(d) < max(15, int(lookback) // 2):
+            failures += 1
+            rejected.append({"Kode": symbol.replace(".JK", ""), "Rata-rata nilai transaksi": None, "Rata-rata volume": None, "Status": "Data tidak cukup"})
+            continue
+        avg_value = float((d["Close"].astype(float) * d["Volume"].astype(float)).mean())
+        avg_volume = float(d["Volume"].astype(float).mean())
+        row = {"symbol": symbol, "avg_value": avg_value, "avg_volume": avg_volume}
+        if avg_value >= float(min_avg_value) and avg_volume >= float(min_avg_volume):
+            passed.append(row)
+        else:
+            rejected.append({"Kode": symbol.replace(".JK", ""), "Rata-rata nilai transaksi": avg_value, "Rata-rata volume": avg_volume, "Status": "Di bawah ambang"})
+    passed.sort(key=lambda x: x["avg_value"], reverse=True)
+    return passed, rejected, failures
 
 # ---------------- Market data and indicators ----------------
 @st.cache_data(ttl=300, show_spinner=False)
@@ -115,7 +183,7 @@ def market_regime():
     p,m20,m50=map(float,[r.Close,r.MA20,r.MA50]); regime="BULLISH" if p>m20>m50 else ("BEARISH" if p<m20<m50 else "SIDEWAYS")
     return {"regime":regime,"price":p,"ma20":m20,"ma50":m50,"score":10 if regime=="BULLISH" else (0 if regime=="BEARISH" else 5),"timestamp":d.index[-1]}
 
-def analyze(symbol):
+def analyze(symbol, include_fundamentals=True):
     raw=download_daily(symbol)
     if raw.empty or len(raw)<50: return None
     d=indicators(raw); r=d.iloc[-1]
@@ -143,14 +211,19 @@ def analyze(symbol):
     if (p-sup)/p<=.05: score+=10; reasons.append("Harga relatif dekat support")
     elif p<res*.98: score+=5
     market=market_regime(); score+=market["score"]
-    try:
-        info=yf.Ticker(symbol).info; pe=info.get("trailingPE"); pb=info.get("priceToBook"); roe=info.get("returnOnEquity")
-    except Exception: pe=pb=roe=None
-    fscore=0
-    if pe is not None and np.isfinite(pe): fscore+=2 if 0<pe<=15 else (1 if 15<pe<=25 else 0)
-    if pb is not None and np.isfinite(pb): fscore+=2 if 0<pb<=2 else (1 if 2<pb<=4 else 0)
-    if roe is not None and np.isfinite(roe) and roe>=.15: fscore+=1
-    score+=fscore
+    # Fundamental metadata is optional: Yahoo Ticker.info can be slow or unavailable.
+    # The broad scanner uses technical-only scoring for speed and consistency of scan coverage.
+    if include_fundamentals:
+        try:
+            info = yf.Ticker(symbol).info
+            pe, pb, roe = info.get("trailingPE"), info.get("priceToBook"), info.get("returnOnEquity")
+        except Exception:
+            pe = pb = roe = None
+        fscore = 0
+        if pe is not None and np.isfinite(pe): fscore += 2 if 0 < pe <= 15 else (1 if 15 < pe <= 25 else 0)
+        if pb is not None and np.isfinite(pb): fscore += 2 if 0 < pb <= 2 else (1 if 2 < pb <= 4 else 0)
+        if roe is not None and np.isfinite(roe) and roe >= .15: fscore += 1
+        score += fscore
     entry_low=max(.01,min(p,m20)); entry_high=min(max(p,m20),p*1.02); entry=(entry_low+entry_high)/2
     stop=max(.01,min(p-1.2*atr,sup-.25*atr)); risk=entry-stop
     if risk<=0: stop=entry*.97; risk=entry-stop
@@ -237,25 +310,142 @@ def record_equity_snapshot():
 
 def page_hunter():
     st.header("🎯 Swing Hunter")
-    m=market_regime(); emoji={"BULLISH":"🟢","SIDEWAYS":"🟡","BEARISH":"🔴","UNKNOWN":"⚪"}.get(m["regime"],"⚪")
-    st.markdown(f"<div class='card'><h3>IHSG {emoji} {m['regime']}</h3>Harga: {money(m['price']) if m['price'] else 'N/A'} · MA20: {money(m['ma20']) if m['ma20'] else '-'} · MA50: {money(m['ma50']) if m['ma50'] else '-'}<br><span class='small-muted'>Yahoo Finance; harga mungkin tertunda. Candle: {m['timestamp']}</span></div>",unsafe_allow_html=True)
-    mode=st.radio("Universe saham",["Daftar pilihan","Ketik sendiri"],horizontal=True); default="ANTM,ASII,BBNI,BBRI,BBCA,BMRI,TLKM,INCO,MDKA,PGAS,ADRO,UNTR,ICBP,KLBF,AMRT,CPIN,BRIS"
-    if mode=="Daftar pilihan": symbols=[x.strip()+("" if x.strip().endswith(".JK") else ".JK") for x in default.split(",")]
+    m = market_regime()
+    emoji = {"BULLISH":"🟢", "SIDEWAYS":"🟡", "BEARISH":"🔴", "UNKNOWN":"⚪"}.get(m["regime"], "⚪")
+    st.markdown(f"<div class='card'><h3>IHSG {emoji} {m['regime']}</h3>Harga: {money(m['price']) if m['price'] else 'N/A'} · MA20: {money(m['ma20']) if m['ma20'] else '-'} · MA50: {money(m['ma50']) if m['ma50'] else '-'}<br><span class='small-muted'>Yahoo Finance; harga dapat tertunda. Candle terakhir: {m['timestamp']}</span></div>", unsafe_allow_html=True)
+
+    universe = st.radio(
+        "Pilih universe saham",
+        ["Watchlist pribadi", "Universe likuid", "Universe indeks"],
+        horizontal=True,
+        key="hunter_universe_mode",
+    )
+    symbols = []
+    universe_label = universe
+    liquid_details = []
+    rejected_details = []
+    screen_failures = 0
+
+    if universe == "Watchlist pribadi":
+        saved_watchlist = get_app_setting("watchlist_symbols", DEFAULT_WATCHLIST).replace(",", ", ")
+        watch_text = st.text_area("Kode saham (pisahkan dengan koma)", saved_watchlist, key="hunter_watchlist_text", help="Contoh: BBNI, TLKM, ANTM. Watchlist disimpan ke SQLite.")
+        col_save, col_info = st.columns([1, 2])
+        if col_save.button("💾 Simpan watchlist", use_container_width=True):
+            clean = normalize_symbols(watch_text)
+            if clean:
+                set_app_setting("watchlist_symbols", ",".join(x.replace(".JK", "") for x in clean))
+                st.success(f"Watchlist tersimpan: {len(clean)} saham.")
+            else:
+                st.error("Masukkan minimal satu kode saham yang valid.")
+        col_info.caption("Disimpan pada database SQLite aktif.")
+        symbols = normalize_symbols(watch_text)
+
+    elif universe == "Universe likuid":
+        st.caption("Pool kandidat awal dipindai lalu disaring memakai data harian Yahoo Finance. Ini bukan daftar lengkap seluruh saham BEI.")
+        c1, c2, c3 = st.columns(3)
+        lookback = c1.selectbox("Periode rata-rata", [20, 30, 60], index=0, format_func=lambda x: f"{x} hari bursa")
+        min_value_b = c2.number_input("Min. nilai transaksi rata-rata (Rp miliar/hari)", min_value=0.0, max_value=1000.0, value=5.0, step=1.0)
+        min_volume_m = c3.number_input("Min. volume rata-rata (juta saham/hari)", min_value=0.0, max_value=1000.0, value=1.0, step=0.5)
+        if st.button("🔄 Bangun universe likuid", use_container_width=True):
+            with st.spinner("Memeriksa data historis kandidat saham..."):
+                candidate_symbols = tuple(normalize_symbols(LIQUID_CANDIDATES))
+                passed, rejected, failures = screen_liquid_universe(candidate_symbols, int(lookback), float(min_value_b) * 1_000_000_000, float(min_volume_m) * 1_000_000)
+            st.session_state["liquid_universe_symbols"] = [x["symbol"] for x in passed]
+            st.session_state["liquid_universe_details"] = passed
+            st.session_state["liquid_universe_rejected"] = rejected
+            st.session_state["liquid_universe_failures"] = failures
+            st.session_state["liquid_universe_time"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        symbols = st.session_state.get("liquid_universe_symbols", [])
+        liquid_details = st.session_state.get("liquid_universe_details", [])
+        rejected_details = st.session_state.get("liquid_universe_rejected", [])
+        screen_failures = st.session_state.get("liquid_universe_failures", 0)
+        if symbols:
+            st.success(f"{len(symbols)} saham memenuhi filter likuiditas · hasil filter: {st.session_state.get('liquid_universe_time', '-')}")
+            if liquid_details:
+                liq_df = pd.DataFrame([{"Kode": x["symbol"].replace(".JK", ""), "Rata-rata nilai transaksi/hari": x["avg_value"], "Rata-rata volume/hari": x["avg_volume"]} for x in liquid_details])
+                st.dataframe(liq_df, use_container_width=True, hide_index=True)
+        elif "liquid_universe_symbols" not in st.session_state:
+            st.info("Tekan **Bangun universe likuid** terlebih dahulu untuk menyaring kandidat.")
+        if rejected_details:
+            with st.expander(f"Lihat saham yang tidak lolos / data bermasalah ({len(rejected_details)})"):
+                st.dataframe(pd.DataFrame(rejected_details), use_container_width=True, hide_index=True)
+                if screen_failures:
+                    st.caption(f"Data tidak cukup atau gagal: {screen_failures}. Saham tersebut tidak dianggap lolos.")
+
     else:
-        txt=st.text_area("Kode saham dipisahkan koma",default); symbols=list(dict.fromkeys([x.strip().upper()+("" if x.strip().upper().endswith(".JK") else ".JK") for x in txt.split(",") if x.strip()]))
-    a,b,c=st.columns(3); min_score=a.slider("Skor minimum",40,95,65); min_target=b.slider("Target minimum (%)",1,15,5)/100; min_rr=c.slider("R:R minimum",1.0,4.0,2.0,.5)
-    if st.button("🚀 Scan saham",use_container_width=True):
-        results=[]; prog=st.progress(0)
-        for i,s in enumerate(symbols):
-            r=analyze(s)
-            if r and r["score"]>=min_score and r["potential"]>=min_target and r["rr"]>=min_rr: results.append(r)
-            prog.progress((i+1)/max(1,len(symbols)))
-        prog.empty(); results.sort(key=lambda x:(x["score"],x["potential"],x["rr"]),reverse=True); st.session_state["hunter_results"]=results; st.session_state["hunter_time"]=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    results=st.session_state.get("hunter_results",[])
+        index_choice = st.selectbox("Pilih indeks", ["LQ45", "IDX30", "Gabungan LQ45 + IDX30"], index=0)
+        lq45_text = get_app_setting("index_lq45_symbols", DEFAULT_LQ45)
+        idx30_text = get_app_setting("index_idx30_symbols", DEFAULT_IDX30)
+        updated_text = get_app_setting("index_list_updated", INDEX_LIST_UPDATED)
+        with st.expander("⚙️ Kelola / perbarui daftar konstituen indeks"):
+            st.caption("Daftar bawaan adalah seed untuk periode 3 Agustus–30 Oktober 2026 berdasarkan publikasi pasar yang merujuk evaluasi BEI. Verifikasi dengan publikasi BEI terbaru sebelum dipakai; aplikasi tidak mengklaim memperbarui daftar indeks otomatis.")
+            st.markdown(f"Sumber referensi: [{INDEX_SOURCE_URL}]({INDEX_SOURCE_URL})")
+            edit_lq = st.text_area("Konstituen LQ45", lq45_text, key="edit_lq45_symbols", height=100)
+            edit_idx = st.text_area("Konstituen IDX30", idx30_text, key="edit_idx30_symbols", height=100)
+            edit_date = st.text_input("Periode / tanggal verifikasi daftar", updated_text, key="edit_index_date")
+            if st.button("💾 Simpan daftar indeks", use_container_width=True):
+                clean_lq, clean_idx = normalize_symbols(edit_lq), normalize_symbols(edit_idx)
+                if not clean_lq or not clean_idx:
+                    st.error("Kedua daftar indeks harus berisi minimal satu kode saham.")
+                else:
+                    set_app_setting("index_lq45_symbols", ",".join(x.replace(".JK", "") for x in clean_lq))
+                    set_app_setting("index_idx30_symbols", ",".join(x.replace(".JK", "") for x in clean_idx))
+                    set_app_setting("index_list_updated", edit_date.strip() or "Tanggal verifikasi belum diisi")
+                    st.success("Daftar indeks tersimpan ke SQLite. Halaman akan memuat ulang dengan daftar terbaru.")
+                    st.rerun()
+        lq45 = normalize_symbols(lq45_text)
+        idx30 = normalize_symbols(idx30_text)
+        if index_choice == "LQ45": symbols = lq45
+        elif index_choice == "IDX30": symbols = idx30
+        else: symbols = list(dict.fromkeys(lq45 + idx30))
+        st.caption(f"Daftar konstituen: {updated_text} · LQ45 {len(lq45)} saham · IDX30 {len(idx30)} saham. Verifikasi daftar sebelum digunakan.")
+
+    symbols = list(dict.fromkeys(symbols))
+    st.caption(f"Universe aktif: {universe_label} · {len(symbols)} ticker siap dipindai. Skor scan berbasis teknikal agar pemindaian banyak saham lebih cepat.")
+    a, b, c = st.columns(3)
+    min_score = a.slider("Skor minimum", 40, 85, 65)
+    min_target = b.slider("Target minimum (%)", 1, 15, 5) / 100
+    min_rr = c.slider("R:R minimum", 1.0, 4.0, 2.0, 0.5)
+
+    if st.button("🚀 Scan saham", use_container_width=True, disabled=not symbols):
+        results, errors = [], []
+        prog = st.progress(0)
+        status = st.empty()
+        for i, symbol in enumerate(symbols):
+            status.caption(f"Menganalisis {i+1}/{len(symbols)}: {symbol}")
+            try:
+                r = analyze(symbol, include_fundamentals=False)
+                if r is None:
+                    errors.append({"Kode": symbol.replace(".JK", ""), "Alasan": "Data kosong / histori indikator belum cukup"})
+                elif r["score"] >= min_score and r["potential"] >= min_target and r["rr"] >= min_rr:
+                    results.append(r)
+            except Exception as exc:
+                errors.append({"Kode": symbol.replace(".JK", ""), "Alasan": str(exc)[:160]})
+            prog.progress((i + 1) / max(1, len(symbols)))
+        prog.empty(); status.empty()
+        results.sort(key=lambda x: (x["score"], x["potential"], x["rr"]), reverse=True)
+        st.session_state["hunter_results"] = results
+        st.session_state["hunter_time"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        st.session_state["hunter_scan_total"] = len(symbols)
+        st.session_state["hunter_scan_errors"] = errors
+        st.session_state["hunter_scan_universe"] = universe_label
+
+    results = st.session_state.get("hunter_results", [])
     if results:
-        st.caption(f"Scan terakhir: {st.session_state.get('hunter_time','-')} · {len(results)} setup lolos")
+        st.caption(f"Scan terakhir: {st.session_state.get('hunter_time', '-')} · Universe: {st.session_state.get('hunter_scan_universe', '-')} · {len(results)} setup lolos dari {st.session_state.get('hunter_scan_total', '-')} ticker")
+        out_df = pd.DataFrame([{ "Kode": r["symbol"].replace(".JK", ""), "Sinyal": r["signal"], "Skor": r["score"], "Harga": r["price"], "Potensi TP1 (%)": round(r["potential"] * 100, 2), "R:R": round(r["rr"], 2), "RSI": round(r["rsi"], 1), "Volume / MA20": round(r["vol_ratio"], 2)} for r in results])
+        st.dataframe(out_df, use_container_width=True, hide_index=True)
+        st.download_button("⬇️ Ekspor hasil scan CSV", out_df.to_csv(index=False).encode("utf-8-sig"), file_name=f"swing_hunter_scan_{date.today().isoformat()}.csv", mime="text/csv", use_container_width=True)
         for r in results[:12]: show_setup(r)
-    else: st.info("Tekan Scan saham. Hasil kosong dapat berarti tidak ada setup lolos filter atau data tidak tersedia.")
+    elif "hunter_time" in st.session_state:
+        st.warning(f"Scan terakhir ({st.session_state.get('hunter_time', '-')}) tidak menghasilkan setup yang lolos filter. Ini berbeda dari kegagalan data.")
+    else:
+        st.info("Pilih universe, lalu tekan Scan saham. Untuk universe likuid, bangun universe terlebih dahulu.")
+    scan_errors = st.session_state.get("hunter_scan_errors", [])
+    if scan_errors:
+        with st.expander(f"Ticker gagal dianalisis / data tidak cukup ({len(scan_errors)})"):
+            st.dataframe(pd.DataFrame(scan_errors), use_container_width=True, hide_index=True)
+
 
 def page_analyzer():
     st.header("🔎 Analyzer")

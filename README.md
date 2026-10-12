@@ -56,7 +56,24 @@ python -c "import sqlite3; c=sqlite3.connect('swing_hunter_v5.sqlite3'); c.execu
 
 ## Batasan penting
 - Yahoo Finance/yfinance dapat memberi data tertunda, tidak lengkap, atau kosong untuk saham IDX; ini bukan feed realtime tick-by-tick resmi.
-- Daftar saham scanner adalah watchlist, bukan daftar konstituen LQ45 dinamis.
+- Daftar universe indeks dapat diedit dan disimpan, tetapi pembaruan konstituen tidak otomatis; periksa tanggal verifikasi dan publikasi BEI terbaru.
 - Grafik drawdown bergantung pada snapshot yang dibuat. Untuk hasil bermakna, catat snapshot secara rutin. Nilai ekuitas adalah nilai pasar kepemilikan ditambah realized P/L kumulatif, bukan rekonstruksi lengkap arus kas/deposit/withdrawal.
 - Risk limits adalah peringatan/kalkulator, tidak mengirim order atau memaksa broker menolak transaksi.
 - Skor adalah sistem rule-based yang belum teruji sebagai strategi menguntungkan; backtest dengan fee, slippage, dan data out-of-sample sebelum digunakan untuk keputusan riil.
+
+
+## Revisi Universe saham (V5.1)
+
+Tab Swing Hunter menyediakan tiga pilihan universe:
+
+1. **Watchlist pribadi** — masukkan kode saham dipisahkan koma dan simpan ke tabel `app_settings` di SQLite.
+2. **Universe likuid** — menyaring pool kandidat saham menggunakan rata-rata `Close × Volume` dan rata-rata volume selama 20/30/60 hari bursa. Nilai `Close × Volume` merupakan estimasi nilai transaksi, bukan data turnover resmi BEI. Pool kandidat bawaan bukan seluruh saham BEI. Saham dengan data tidak cukup tidak dianggap lolos.
+3. **Universe indeks** — daftar LQ45, IDX30, atau gabungan, dengan editor daftar dan periode verifikasi. Seed awal mencerminkan periode 3 Agustus–30 Oktober 2026; pengguna perlu memverifikasi/memperbarui daftar berdasarkan publikasi terbaru BEI. Aplikasi tidak mengklaim memperbarui konstituen secara otomatis.
+
+### Catatan pemindaian
+
+- Scanner menggunakan skor teknikal agar pemindaian universe lebih luas tidak memanggil `yfinance.Ticker.info` satu per satu. Halaman Analyzer dan analisis portofolio tetap dapat memakai tambahan skor fundamental. Karena itu skor teknikal hasil scan dapat berbeda dari skor pada Analyzer.
+- Data Yahoo Finance dapat tertunda, tidak lengkap, atau gagal diunduh. Jangan gunakan sebagai pengganti harga eksekusi broker.
+- SQLite di filesystem lokal Streamlit Cloud tidak dijamin persisten saat restart/redeploy. Backup dan penyimpanan persisten tetap diperlukan untuk jurnal transaksi penting.
+
+Sumber referensi indeks: https://www.idx.id/id/data-pasar/laporan-statistik/fact-sheet-index
