@@ -1,30 +1,8 @@
 import io
 import os
 import sqlite3
-from datetime import datetime
-import streamlit as st
-import yfinance as yf
-
-def display_ihsg_header():
-    try:
-        ihsg = yf.Ticker("^JKSE")
-        df = ihsg.history(period="3mo", interval="1d")
-        
-        if not df.empty:
-            last_price = float(df['Close'].iloc[-1])
-            ma20 = float(df['Close'].rolling(20).mean().iloc[-1])
-            ma50 = float(df['Close'].rolling(50).mean().iloc[-1])
-            
-            status = "BEARISH" if last_price < ma20 else "BULLISH"
-            
-            # WAKTU REALTIME SAAT INI
-            current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            
-            st.markdown(f"### IHSG {'🔴' if status == 'BEARISH' else '🟢'} {status}")
-            st.write(f"Harga: Rp{last_price:,.0f} · MA20: Rp{ma20:,.0f} · MA50: Rp{ma50:,.0f}")
-            st.caption(f"Yahoo Finance; harga dapat tertunda. Update terakhir: {current_time}")
-    except Exception as e:
-        st.error(f"Gagal memuat status IHSG: {e}")from pathlib import Path
+from datetime import date, datetime
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
