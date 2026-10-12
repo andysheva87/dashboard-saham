@@ -3,9 +3,10 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 from datetime import datetime
+import json
 
 # ==========================================================
-# KONFIGURASI TAMPILAN DASHBOARD (MOBILE OPTIMIZED)
+# KONFIGURASI APLIKASI & MOBILE UI STYLING
 # ==========================================================
 st.set_page_config(
     page_title="V5 Mobile Swing Hunter Pro",
@@ -14,7 +15,6 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# Custom CSS agar antarmuka rapi di layar ponsel
 st.markdown("""
     <style>
     .block-container { padding-top: 1rem; padding-bottom: 2rem; padding-left: 0.8rem; padding-right: 0.8rem; }
@@ -24,11 +24,11 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title("🎯 V5 Mobile Swing Hunter")
-st.caption("Swing Scanner • Portfolio Advisor • Buy/Sell • Risk Limits • Equity & Drawdown")
+st.title("🎯 V5 Mobile Swing Hunter Pro")
+st.caption("Swing scanner • Portfolio Advisor • Buy/Sell • Trading Journal • Risk Limits • Equity & Drawdown • Backup")
 
 # ==========================================================
-# INISIALISASI SESSION STATE
+# INITIALIZE SESSION STATES
 # ==========================================================
 if 'portfolio' not in st.session_state:
     st.session_state.portfolio = [
@@ -39,12 +39,14 @@ if 'portfolio' not in st.session_state:
 if 'journal' not in st.session_state:
     st.session_state.journal = []
 
+if 'watchlist' not in st.session_state:
+    st.session_state.watchlist = ['BBRI', 'BBNI', 'BMRI', 'BBCA', 'TLKM', 'ASII', 'ITMG', 'BDMN', 'SMGR', 'PGAS']
+
 # ==========================================================
-# FUNGSI PEMBANTU (FORMATTING & DATA LOADER)
+# HELPER FUNCTIONS
 # ==========================================================
 def rupiah(val):
-    if val is None or pd.isna(val): 
-        return "N/A"
+    if val is None or pd.isna(val): return "N/A"
     return f"Rp {val:,.0f}"
 
 @st.cache_data(ttl=120)
@@ -52,12 +54,9 @@ def load_stock(symbol):
     try:
         ticker = yf.Ticker(symbol)
         df = ticker.history(period="6mo", interval="1d", auto_adjust=False)
-        if df.empty: 
-            return pd.DataFrame(), {}, "Data kosong."
-        try: 
-            info = ticker.info
-        except: 
-            info = {}
+        if df.empty: return pd.DataFrame(), {}, "Data kosong"
+        try: info = ticker.info
+        except: info = {}
         return df, info, None
     except Exception as e:
         return pd.DataFrame(), {}, str(e)
@@ -72,13 +71,9 @@ def get_ihsg_status():
             ma50 = float(df['Close'].rolling(50).mean().iloc[-1])
             status = "BEARISH" if close < ma20 or ma20 < ma50 else "BULLISH"
             return status, close, ma20, ma50
-    except: 
-        pass
+    except: pass
     return "UNKNOWN", 0, 0, 0
 
-# ==========================================================
-# KALKULASI INDIKATOR TEKNIKAL
-# ==========================================================
 def calculate_indicators(df):
     data = df.copy()
     close = data["Close"]
@@ -89,19 +84,16 @@ def calculate_indicators(df):
     data["MA20"] = close.rolling(20).mean()
     data["MA50"] = close.rolling(50).mean()
     
-    # RSI 14
     delta = close.diff()
     gain = (delta.where(delta > 0, 0)).rolling(14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
     rs = gain / loss.replace(0, np.nan)
     data["RSI14"] = (100 - (100 / (1 + rs))).fillna(50)
 
-    # ATR 14
     prev_close = close.shift(1)
     tr = pd.concat([high - low, (high - prev_close).abs(), (low - prev_close).abs()], axis=1).max(axis=1)
     data["ATR14"] = tr.rolling(14).mean()
 
-    # Volume Ratio
     data["VolumeMA20"] = volume.rolling(20).mean()
     data["VolRatio"] = (volume / data["VolumeMA20"].replace(0, np.nan)).fillna(1.0)
 
@@ -111,82 +103,74 @@ def calculate_indicators(df):
     return data
 
 # ==========================================================
-# TAB NAVIGASI UTAMA
+# 8 MAIN NAVIGATION TABS
 # ==========================================================
-tab_hunter, tab_portfolio, tab_journal, tab_risk = st.tabs([
-    "🎯 Hunter", "💼 Portfolio", "📜 Journal", "🛡️ Risk Limits"
+tab_hunter, tab_portfolio, tab_buysell, tab_journal, tab_analyzer, tab_risk, tab_equity, tab_backup = st.tabs([
+    "🎯 Hunter", "💼 Portfolio", "🔄 Buy / Sell", "📜 Journal", "🔎 Analyzer", "🛡️ Risk", "📉 Equity", "💾 Backup"
 ])
 
 # ----------------------------------------------------------
-# TAB 1: HUNTER (SCANNER)
+# TAB 1: HUNTER (SWING SCANNER)
 # ----------------------------------------------------------
 with tab_hunter:
     ihsg_stat, ihsg_p, ihsg_ma20, ihsg_ma50 = get_ihsg_status()
     current_time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    # Header Status IHSG Realtime
     with st.container():
         if ihsg_stat == "BEARISH":
             st.error(f"### IHSG 🔴 BEARISH\nHarga: {rupiah(ihsg_p)} · MA20: {rupiah(ihsg_ma20)} · MA50: {rupiah(ihsg_ma50)}")
         else:
             st.success(f"### IHSG 🟢 BULLISH\nHarga: {rupiah(ihsg_p)} · MA20: {rupiah(ihsg_ma20)} · MA50: {rupiah(ihsg_ma50)}")
-        
-        st.caption(f"Yahoo Finance; harga dapat tertunda. Update data: **{current_time_str}**")
+        st.caption(f"Yahoo Finance; harga dapat tertunda. Update data realtime: **{current_time_str}**")
 
     st.markdown("---")
-    st.markdown("#### Filter Parameter Scan")
+    st.markdown("#### Parameter Pemindaian")
     
     col_f1, col_f2, col_f3 = st.columns(3)
-    default_rr = 2.00 if ihsg_stat != "BEARISH" else 2.50
-    default_score = 50
-
-    min_score = col_f1.slider("Skor Minimum", 0, 100, default_score)
+    min_score = col_f1.slider("Skor Minimum", 0, 100, 50)
     target_min = col_f2.slider("Target Minimum (%)", 1, 15, 3)
-    min_rr = col_f3.slider("R:R Minimum", 1.0, 5.0, default_rr, step=0.25)
+    min_rr = col_f3.slider("R:R Minimum", 1.0, 5.0, 2.0, step=0.25)
 
-    scan_ticker = st.text_input("Kode Saham (Analisis Tunggal)", "BBRI").upper().strip()
-    
-    if st.button("🚀 Scan Saham", use_container_width=True):
-        df_stock, info_stock, err = load_stock(f"{scan_ticker}.JK")
-        if err or df_stock.empty:
-            st.error(f"Gagal memuat data {scan_ticker}. Pastikan kode saham benar!")
+    if st.button("🚀 Scan Saham Watchlist", use_container_width=True):
+        results = []
+        for ticker in st.session_state.watchlist:
+            df_s, info_s, err = load_stock(f"{ticker}.JK")
+            if not err and not df_s.empty:
+                df_s = calculate_indicators(df_s)
+                last = df_s.iloc[-1]
+                price = float(last["Close"])
+                atr = float(last["ATR14"]) if pd.notna(last["ATR14"]) else price * 0.03
+                support = float(last["Support20"]) if pd.notna(last["Support20"]) else price - atr
+                resistance = float(last["Resistance20"]) if pd.notna(last["Resistance20"]) else price + (atr * 2)
+
+                sl = min(support - (atr * 0.25), price - (atr * 1.2))
+                tp = max(resistance, price + ((price - sl) * 2))
+                
+                risk_pct = ((price - sl) / price) * 100
+                gain_pct = ((tp - price) / price) * 100
+                rr_ratio = gain_pct / risk_pct if risk_pct > 0 else 0
+
+                score = 50
+                if price > float(last["MA20"]): score += 15
+                if float(last["VolRatio"]) >= 1.2: score += 15
+                if 30 <= float(last["RSI14"]) <= 55: score += 20
+
+                if score >= min_score and gain_pct >= target_min and rr_ratio >= min_rr:
+                    signal = "🟢 BUY" if score >= 70 else "🟡 WATCH"
+                    results.append({
+                        'Kode': ticker, 'Sinyal': signal, 'Skor': score,
+                        'Harga': price, 'Potensi TP1 (%)': round(gain_pct, 2),
+                        'R:R': round(rr_ratio, 2), 'RSI': round(float(last["RSI14"]), 1),
+                        'Vol/MA20': round(float(last["VolRatio"]), 2)
+                    })
+
+        if results:
+            st.dataframe(pd.DataFrame(results), use_container_width=True, hide_index=True)
         else:
-            df_stock = calculate_indicators(df_stock)
-            last = df_stock.iloc[-1]
-            price = float(last["Close"])
-            atr = float(last["ATR14"]) if pd.notna(last["ATR14"]) else price * 0.03
-            support = float(last["Support20"]) if pd.notna(last["Support20"]) else price - atr
-            resistance = float(last["Resistance20"]) if pd.notna(last["Resistance20"]) else price + (atr * 2)
-
-            sl = min(support - (atr * 0.25), price - (atr * 1.2))
-            tp = max(resistance, price + ((price - sl) * 2))
-            
-            risk_pct = ((price - sl) / price) * 100
-            gain_pct = ((tp - price) / price) * 100
-            rr_ratio = gain_pct / risk_pct if risk_pct > 0 else 0
-
-            st.markdown("---")
-            st.markdown("#### Hasil Analisis Pre-Buy")
-            
-            m1, m2, m3 = st.columns(3)
-            m1.metric("Harga Terakhir", rupiah(price))
-            m2.metric("RSI (14)", f"{last['RSI14']:.1f}")
-            m3.metric("Volume Ratio", f"{last['VolRatio']:.2f}x")
-
-            p1, p2, p3 = st.columns(3)
-            p1.metric("Area Entry", rupiah(price))
-            p2.metric("Stop Loss", rupiah(sl), f"-{risk_pct:.2f}%")
-            p3.metric("Target Profit (TP)", rupiah(tp), f"+{gain_pct:.2f}%")
-
-            st.info(f"**Risk to Reward Ratio:** 1 : {rr_ratio:.2f}")
-
-            if rr_ratio < min_rr:
-                st.warning(f"⚠️ WAIT & SEE: RRR (1:{rr_ratio:.2f}) belum memenuhi batas minimum ({min_rr:.2f}).")
-            else:
-                st.success("🎉 APPROVED: Setup memenuhi kriteria Risk to Reward!")
+            st.warning("Scan terakhir tidak menghasilkan setup yang lolos filter. Coba turunkan slider parameter.")
 
 # ----------------------------------------------------------
-# TAB 2: PORTFOLIO (FLOATING P&L & AUTO-AVERAGE)
+# TAB 2: PORTFOLIO ADVISOR
 # ----------------------------------------------------------
 with tab_portfolio:
     st.subheader("Portofolio Aktif (Realtime Market Price)")
@@ -210,12 +194,11 @@ with tab_portfolio:
             st.rerun()
 
     if not st.session_state.portfolio:
-        st.info("Portofolio saat ini kosong.")
+        st.info("Portofolio kosong.")
     else:
         tot_modal = 0
         tot_floating = 0
 
-        st.markdown("---")
         for idx, item in enumerate(st.session_state.portfolio):
             df_p, _, _ = load_stock(f"{item['ticker']}.JK")
             curr_p = float(df_p["Close"].iloc[-1]) if not df_p.empty else item['avg']
@@ -257,15 +240,113 @@ with tab_portfolio:
         pf2.metric("Total Floating P&L", rupiah(tot_floating), f"{(tot_floating/tot_modal)*100:+.2f}%" if tot_modal > 0 else "0%")
 
 # ----------------------------------------------------------
-# TAB 3 & 4: JOURNAL & RISK LIMITS
+# TAB 3: BUY / SELL EXECUTIONS
+# ----------------------------------------------------------
+with tab_buysell:
+    st.subheader("Eksekusi & Catat Transaksi")
+    if not st.session_state.portfolio:
+        st.info("Tidak ada posisi portofolio yang dapat dijual.")
+    else:
+        sel_idx = st.selectbox("Pilih Saham yang Hendak Dijual", range(len(st.session_state.portfolio)), format_func=lambda x: st.session_state.portfolio[x]['ticker'])
+        target_item = st.session_state.portfolio[sel_idx]
+        
+        df_target, _, _ = load_stock(f"{target_item['ticker']}.JK")
+        def_price = float(df_target["Close"].iloc[-1]) if not df_target.empty else target_item['avg']
+        
+        sell_price = st.number_input("Harga Jual Eksekusi (Rp)", value=int(def_price))
+        sell_lots = st.number_input("Jumlah Lot yang Dijual", min_value=1, max_value=int(target_item['lots']), value=int(target_item['lots']))
+        
+        if st.button("🔴 Eksekusi Penjualan"):
+            cost_sold = sell_lots * 100 * target_item['avg']
+            revenue = sell_lots * 100 * sell_price
+            realized_pnl = revenue - cost_sold
+            
+            # Catat ke Jurnal
+            st.session_state.journal.append({
+                'Tanggal': datetime.now().strftime("%Y-%m-%d"),
+                'Kode': target_item['ticker'],
+                'Lot': sell_lots,
+                'Avg Beli': target_item['avg'],
+                'Harga Jual': sell_price,
+                'Realized P&L': realized_pnl,
+                'Status': 'TAKE PROFIT' if realized_pnl >= 0 else 'CUT LOSS'
+            })
+            
+            # Update Lot Portofolio
+            if sell_lots == target_item['lots']:
+                st.session_state.portfolio.pop(sel_idx)
+            else:
+                target_item['lots'] -= sell_lots
+                
+            st.success(f"Berhasil mengoperasikan penjualan {target_item['ticker']}!")
+            st.rerun()
+
+# ----------------------------------------------------------
+# TAB 4: TRADING JOURNAL
 # ----------------------------------------------------------
 with tab_journal:
-    st.subheader("Jurnal Transaksi Realized P&L")
-    st.info("Catatan eksekusi jual/beli posisi disimpan di sini.")
+    st.subheader("📜 Jurnal Realized P&L")
+    if not st.session_state.journal:
+        st.info("Belum ada riwayat transaksi yang ditutup.")
+    else:
+        df_j = pd.DataFrame(st.session_state.journal)
+        st.dataframe(df_j, use_container_width=True, hide_index=True)
+        tot_realized = sum([x['Realized P&L'] for x in st.session_state.journal])
+        st.metric("Total Realized P&L Kumulatif", rupiah(tot_realized))
 
+# ----------------------------------------------------------
+# TAB 5: ANALYZER (DEEP DIVE)
+# ----------------------------------------------------------
+with tab_analyzer:
+    st.subheader("🔎 Deep Dive Stock Analyzer")
+    an_ticker = st.text_input("Masukkan Kode Saham Analisis", "TLKM").upper().strip()
+    if st.button("Analisis Saham Ini"):
+        df_an, info_an, err_an = load_stock(f"{an_ticker}.JK")
+        if not err_an and not df_an.empty:
+            df_an = calculate_indicators(df_an)
+            last_an = df_an.iloc[-1]
+            
+            st.write(f"**Harga Terakhir:** {rupiah(last_an['Close'])}")
+            st.write(f"**MA20:** {rupiah(last_an['MA20'])} | **MA50:** {rupiah(last_an['MA50'])}")
+            st.write(f"**RSI Momentum:** {last_an['RSI14']:.1f}")
+            st.write(f"**PER:** {info_an.get('trailingPE', 'N/A')} | **PBV:** {info_an.get('priceToBook', 'N/A')}")
+            st.line_chart(df_an['Close'].tail(60))
+
+# ----------------------------------------------------------
+# TAB 6: RISK LIMITS & POSITION SIZING
+# ----------------------------------------------------------
 with tab_risk:
-    st.subheader("Aturan Batas Risiko Modal (Risk Limits)")
-    cap_rdn = st.number_input("Total Modal RDN (Rp)", value=10000000, step=500000)
-    risk_tol = st.slider("Maksimal Toleransi Kerugian per Trade (%)", 1.0, 5.0, 2.0)
-    max_loss_allowed = cap_rdn * (risk_tol / 100)
-    st.warning(f"💡 Batas kerugian maksimum per transaksi yang diizinkan sistem: **{rupiah(max_loss_allowed)}**.")
+    st.subheader("🛡️ Risk Limits & Money Management")
+    total_rdn = st.number_input("Total Modal RDN (Rp)", value=10000000, step=500000)
+    risk_pct_input = st.slider("Toleransi Kerugian Maksimal (%)", 1.0, 5.0, 2.0)
+    
+    max_risk_rp = total_rdn * (risk_pct_input / 100)
+    st.warning(f"💡 Batas Toleransi Kerugian per Trade: **{rupiah(max_risk_rp)}**")
+
+# ----------------------------------------------------------
+# TAB 7: EQUITY & DRAWDOWN
+# ----------------------------------------------------------
+with tab_equity:
+    st.subheader("📉 Pertumbuhan Ekuitas & Drawdown")
+    st.caption("Grafik ini melacak akumulasi modal dari hasil realized P&L transaksi.")
+    if st.session_state.journal:
+        df_eq = pd.DataFrame(st.session_state.journal)
+        df_eq['Cumulative_PnL'] = df_eq['Realized P&L'].cumsum()
+        st.line_chart(df_eq['Cumulative_PnL'])
+    else:
+        st.info("Belum ada data ekuitas dari transaksi tertutup.")
+
+# ----------------------------------------------------------
+# TAB 8: BACKUP & RESTORE DATA
+# ----------------------------------------------------------
+with tab_backup:
+    st.subheader("💾 Backup & Restore State Data")
+    
+    backup_data = {
+        'portfolio': st.session_state.portfolio,
+        'journal': st.session_state.journal,
+        'watchlist': st.session_state.watchlist
+    }
+    
+    json_str = json.dumps(backup_data, indent=4)
+    st.download_button("📥 Download Backup JSON", data=json_str, file_name=f"backup_swing_hunter_{datetime.now().strftime('%Y%m%d')}.json", mime="application/json")
