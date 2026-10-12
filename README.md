@@ -1,79 +1,30 @@
-# V5 Mobile Swing Hunter (SQLite)
+# V5.1 Mobile Swing Hunter — Audit & Signal Engine
 
-Aplikasi Streamlit mobile-first untuk scan saham IDX, Portfolio Advisor, pencatatan BUY/SELL, Trading Journal, risk limits, grafik ekuitas/drawdown, CSV export, dan backup database SQLite.
+## Perubahan utama
+- `st.set_page_config()` dijalankan sebelum perintah Streamlit lainnya.
+- Intraday dipisahkan dari data daily; scanner tetap menggunakan candle daily untuk indikator swing.
+- Target TP1 tidak lagi dipaksa minimal 2R; R:R bisa benar-benar menyaring setup.
+- Audit scan menunjukkan semua ticker, status data, skor, potensi, R:R, dan alasan gagal filter.
+- Universe watchlist, pool likuid awal, dan daftar indeks yang dapat diedit.
+- Backup SQLite menggunakan SQLite backup API agar konsisten dengan WAL.
+- P/L portfolio menjelaskan bahwa angka masih indikatif dan belum mengurangi estimasi fee jual.
 
-## Isi paket
-- `app.py` — aplikasi lengkap.
-- `requirements.txt` — dependensi Python.
-- `schema.sql` — skema SQLite; aplikasi juga membuat tabel otomatis.
-- `.streamlit_secrets_example.toml` — contoh konfigurasi opsional.
+## Jalankan lokal
+1. Install Python 3.10 atau lebih baru.
+2. Buka terminal di folder ini.
+3. Jalankan `pip install -r requirements.txt`.
+4. Jalankan `streamlit run app.py`.
 
-## Akuntansi transaksi
-- 1 lot = 100 saham.
-- Portofolio awal dimasukkan satu kali ketika tabel transaksi kosong: BBNI 10 lot @ Rp3.603 dan TLKM 9 lot @ Rp2.853.
-- Saldo awal tidak dikenai fee historis karena fee transaksi lama tidak tersedia.
-- Fee tetap default: BUY 0,15%, SELL 0,25%. Ubah melalui environment variables `BUY_FEE_PCT` dan `SELL_FEE_PCT` agar sesuai broker.
-- BUY menambahkan nilai bruto + fee beli ke harga pokok. Average cost diperbarui secara berbobot.
-- SELL ditolak bila jumlah yang dijual melebihi kepemilikan. Realized P/L = nilai jual bruto - fee jual - harga pokok rata-rata saham yang dijual.
-- Unrealized P/L = nilai pasar posisi tersisa - biaya pokok tersisa; tidak mengurangi estimasi fee jual di masa depan.
-- Transaksi dicatat manual setelah transaksi benar-benar terjadi di broker; aplikasi tidak mengirim order ke broker.
+## Deploy Streamlit Cloud
+1. Backup database dan unduh salinan repositori lama terlebih dahulu.
+2. Upload `app.py` dan `requirements.txt` ke branch yang dipakai aplikasi.
+3. Pastikan Main file path menunjuk ke `app.py` yang benar.
+4. Commit perubahan dan periksa log deployment.
+5. Uji scan dengan watchlist kecil terlebih dahulu.
 
-## Jalankan lokal (Windows)
-1. Instal Python 3.10 atau lebih baru.
-2. Ekstrak ZIP, buka terminal di folder proyek.
-3. Buat environment dan instal dependensi:
-
-```powershell
-python -m venv .venv
-.venv\Scripts\activate
-pip install -r requirements.txt
-streamlit run app.py
-```
-
-Database `swing_hunter_v5.sqlite3` dibuat otomatis di folder proyek. Untuk memakai lokasi khusus, set environment variable `SWING_DB_PATH` sebelum menjalankan aplikasi.
-
-## Menjalankan skema manual
-Aplikasi otomatis membuat tabel saat startup. Jika ingin membuat database kosong secara manual, gunakan Python:
-
-```bash
-python -c "import sqlite3; c=sqlite3.connect('swing_hunter_v5.sqlite3'); c.executescript(open('schema.sql', encoding='utf-8').read()); c.close()"
-```
-
-## Deploy ke Streamlit Community Cloud
-1. Upload `app.py`, `requirements.txt`, `schema.sql`, README, dan konfigurasi contoh ke repository GitHub. Jangan upload file database berisi data pribadi atau `secrets.toml`.
-2. Deploy repository di Streamlit Community Cloud dengan `app.py` sebagai entrypoint.
-3. Aplikasi akan membuat file SQLite di filesystem instance secara default. **Peringatan:** filesystem lokal Streamlit Community Cloud tidak dijamin persisten; file bisa hilang ketika instance dihentikan, diganti, atau aplikasi dipindahkan. Untuk catatan trading yang harus persisten, gunakan platform dengan persistent disk atau migrasikan database ke layanan database eksternal.
-4. Bila host menyediakan persistent disk, atur `SWING_DB_PATH` ke direktori mount yang persisten. Gunakan tab Backup secara berkala dan simpan salinan di lokasi aman.
-
-## Fitur
-- Swing Hunter dengan MA20/50/200, RSI, MACD, ATR, volume ratio, support/resistance, dan filter IHSG.
-- Portfolio Advisor: saran berbasis aturan, bukan rekomendasi otomatis.
-- BUY/SELL dengan validasi lot, harga, kode saham, dan batas kepemilikan.
-- Realized/unrealized P/L, histori dan ekspor CSV.
-- Risk limits dan kalkulator ukuran posisi.
-- Snapshot ekuitas harian, grafik ekuitas dan drawdown dari snapshot yang tercatat. Snapshot diperbarui saat pengguna menekan tombol; bukan data historis harian yang direkonstruksi otomatis.
-- Backup file SQLite dan CSV untuk transaksi, kepemilikan, serta snapshot.
-
-## Batasan penting
-- Yahoo Finance/yfinance dapat memberi data tertunda, tidak lengkap, atau kosong untuk saham IDX; ini bukan feed realtime tick-by-tick resmi.
-- Daftar universe indeks dapat diedit dan disimpan, tetapi pembaruan konstituen tidak otomatis; periksa tanggal verifikasi dan publikasi BEI terbaru.
-- Grafik drawdown bergantung pada snapshot yang dibuat. Untuk hasil bermakna, catat snapshot secara rutin. Nilai ekuitas adalah nilai pasar kepemilikan ditambah realized P/L kumulatif, bukan rekonstruksi lengkap arus kas/deposit/withdrawal.
-- Risk limits adalah peringatan/kalkulator, tidak mengirim order atau memaksa broker menolak transaksi.
-- Skor adalah sistem rule-based yang belum teruji sebagai strategi menguntungkan; backtest dengan fee, slippage, dan data out-of-sample sebelum digunakan untuk keputusan riil.
-
-
-## Revisi Universe saham (V5.1)
-
-Tab Swing Hunter menyediakan tiga pilihan universe:
-
-1. **Watchlist pribadi** — masukkan kode saham dipisahkan koma dan simpan ke tabel `app_settings` di SQLite.
-2. **Universe likuid** — menyaring pool kandidat saham menggunakan rata-rata `Close × Volume` dan rata-rata volume selama 20/30/60 hari bursa. Nilai `Close × Volume` merupakan estimasi nilai transaksi, bukan data turnover resmi BEI. Pool kandidat bawaan bukan seluruh saham BEI. Saham dengan data tidak cukup tidak dianggap lolos.
-3. **Universe indeks** — daftar LQ45, IDX30, atau gabungan, dengan editor daftar dan periode verifikasi. Seed awal mencerminkan periode 3 Agustus–30 Oktober 2026; pengguna perlu memverifikasi/memperbarui daftar berdasarkan publikasi terbaru BEI. Aplikasi tidak mengklaim memperbarui konstituen secara otomatis.
-
-### Catatan pemindaian
-
-- Scanner menggunakan skor teknikal agar pemindaian universe lebih luas tidak memanggil `yfinance.Ticker.info` satu per satu. Halaman Analyzer dan analisis portofolio tetap dapat memakai tambahan skor fundamental. Karena itu skor teknikal hasil scan dapat berbeda dari skor pada Analyzer.
-- Data Yahoo Finance dapat tertunda, tidak lengkap, atau gagal diunduh. Jangan gunakan sebagai pengganti harga eksekusi broker.
-- SQLite di filesystem lokal Streamlit Cloud tidak dijamin persisten saat restart/redeploy. Backup dan penyimpanan persisten tetap diperlukan untuk jurnal transaksi penting.
-
-Sumber referensi indeks: https://www.idx.id/id/data-pasar/laporan-statistik/fact-sheet-index
+## Penting tentang data dan persistensi
+- Yahoo Finance bukan feed eksekusi realtime; intraday dapat terlambat, kosong, atau berubah.
+- Universe likuid hanya memeriksa pool kandidat yang tertulis dalam kode, bukan seluruh saham BEI.
+- Daftar LQ45/IDX30 adalah seed awal dan harus diverifikasi dengan publikasi resmi terbaru.
+- SQLite lokal di Streamlit Cloud tidak dijamin persisten. Untuk histori trading yang penting, gunakan penyimpanan persisten atau database eksternal. Jangan commit database pribadi ke repositori publik.
+- Ini aplikasi analisis teknikal dasar; uji dan validasi strategi sebelum mengambil keputusan trading.
