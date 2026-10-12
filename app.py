@@ -9,6 +9,50 @@ import pandas as pd
 import streamlit as st
 import yfinance as yf
 
+import streamlit as st
+import yfinance as yf
+import pandas as pd
+
+@st.cache_data(ttl=30, show_spinner=False)
+def get_intraday_data(symbol):
+    try:
+        df = yf.download(
+            symbol,
+            period="1d",
+            interval="1m",
+            auto_adjust=False,
+            progress=False,
+            threads=False,
+            timeout=15
+        )
+
+        if df is None or df.empty:
+            return pd.DataFrame()
+
+        # Menangani kolom MultiIndex dari yfinance
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+
+        return df.dropna(subset=["Close"])
+
+    except Exception:
+        return pd.DataFrame()
+
+
+if st.button("🔄 Refresh harga"):
+    get_intraday_data.clear()
+
+df = get_intraday_data("BBNI.JK")
+
+if df.empty:
+    st.warning("Data intraday tidak tersedia. Jangan gunakan harga lama sebagai harga terbaru.")
+else:
+    last = df.iloc[-1]
+    candle_time = df.index[-1]
+
+    st.metric("BBNI — candle terakhir", f"Rp {last['Close']:,.0f}")
+    st.caption(f"Waktu candle: {candle_time}")
+
 st.set_page_config(page_title="V5 Mobile Swing Hunter", page_icon="🎯", layout="wide", initial_sidebar_state="collapsed")
 st.markdown("""
 <style>
